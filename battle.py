@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import pygame
 from constants import (
     ACCENT,
@@ -29,12 +31,16 @@ class Move:
 
 
 class Fighter:
-    def __init__(self, name: str, max_hp: int, moves: list[Move], sprite_color: tuple[int, int, int]):
+    def __init__(self, name: str, max_hp: int, moves: list[Move], sprite_color: tuple[int, int, int],
+                 attack_bonus: int = 0, armor: int = 0, has_antidote: bool = False):
         self.name = name
         self.max_hp = max_hp
         self.hp = max_hp
         self.moves = moves
         self.sprite_color = sprite_color
+        self.attack_bonus = attack_bonus
+        self.armor = armor
+        self.has_antidote = has_antidote
 
     @property
     def alive(self) -> bool:
@@ -78,7 +84,7 @@ def _draw_hp_bar(
     surf.blit(hp_text, (x, bar_y + 18))
 
 
-MOVE_COOLDOWNS = {"Flame Burst": 3, "Sap Splash": 2, "Dodge": 2}
+MOVE_COOLDOWNS = {"Flame Burst": 3, "Sap Splash": 2, "Dodge": 2, "Heal": 4, "Pressure Point": 3}
 
 
 class BattleScreen:
@@ -95,6 +101,7 @@ class BattleScreen:
       background: pygame.Surface | None = None,
       player_sprite: pygame.Surface | None = None,
       enemy_sprite: pygame.Surface | None = None,
+      m79_charges: int = 0,
   ):
       self.player = player
       self.enemy = enemy
@@ -113,7 +120,16 @@ class BattleScreen:
       self._anim_timer = 0
       self.last_move_name: str | None = None
       self.cooldowns: dict[str, int] = {}
+      self.disabled_moves: dict[str, int] = {}
       self.dodge_active = False
+      self._skip_enemy_turn = False
+      self._give_turn_back = False
+      self.enemy_burn = 0
+      self.player_poison = 0
+      self.enemy_shake = 0
+      self.player_shake = 0
+      self.enemy_defense_down = 0
+      self.m79_charges = m79_charges
 
   def handle_event(self, event: pygame.event.Event) -> None:
       if self.phase != "menu" or self.result:
@@ -134,7 +150,11 @@ class BattleScreen:
       elif event.key in (pygame.K_RIGHT, pygame.K_d):
           self.selected_move = (self.selected_move + 1) % len(moves)
       elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
-          self._execute_move(moves[self.selected_move])
+          mv = moves[self.selected_move]
+          if self.disabled_moves.get(mv.name, 0) > 0:
+              self.message = f"{mv.name} is disabled! ({self.disabled_moves[mv.name]} turns left)"
+              return
+          self._execute_move(mv)
 
   def _current_moves(self) -> list[Move]:
       base = list(self.player.moves)
@@ -155,6 +175,7 @@ class BattleScreen:
       if move.name == "Finish":
           dmg = max(40, move.power)
           self.enemy.take_damage(dmg)
+          self.enemy_shake = 14
           self.message = f"You use {move.name}! Massive {dmg} damage!"
           self.phase = "player_anim"
           self._anim_timer = 28
@@ -179,13 +200,60 @@ class BattleScreen:
           cd = MOVE_COOLDOWNS.get(move.name, 0)
           if cd:
               self.cooldowns[move.name] = cd
-          self.message = "You brace and dodge! Waiting for enemy attack…"
+          self.message = "You dodge! The zombie strikes back!"
           self.phase = "player_anim"
           self._anim_timer = 28
           return
-      dmg = max(8, int((move.power + (self.player.max_hp // 20)) * 1.5))
+      if move.name == "Heal":
+          heal = 25
+          self.player.hp = min(self.player.max_hp, self.player.hp + heal)
+          self.cooldowns["Heal"] = MOVE_COOLDOWNS["Heal"]
+          self.message = f"You heal for {heal} HP! The zombie strikes back!"
+          self.phase = "player_anim"
+          self._anim_timer = 28
+          return
+      if move.name == "M79 Shot":
+          dmg = 48
+          self.enemy.take_damage(dmg)
+          self.enemy_shake = 14
+          self.m79_charges -= 1
+          if self.m79_charges == 0:
+              self.message = f"BOOM! M79 deals {dmg} damage! Last shell spent — back to Flame Burst."
+          else:
+              self.message = f"BOOM! M79 deals {dmg} damage! ({self.m79_charges} shell{'s' if self.m79_charges != 1 else ''} left)"
+          self.phase = "player_anim"
+          self._anim_timer = 28
+          return
+      if move.name == "Pressure Point":
+          cd = MOVE_COOLDOWNS.get("Pressure Point", 0)
+          if cd:
+              self.cooldowns["Pressure Point"] = cd
+          r = random.random()
+          if r < 0.30:
+              self.player.take_damage(13)
+              self.player_shake = 14
+              self.message = "Pressure Point backfired! You took 13 damage!"
+          elif r < 0.60:
+              self.enemy_defense_down = 3
+              self.message = f"Pressure Point hit a nerve! {self.enemy.name}'s defense drops for 3 turns!"
+          elif r < 0.80:
+              self._skip_enemy_turn = True
+              self.message = f"Pressure Point struck true! {self.enemy.name} is stunned!"
+          else:
+              self.message = "Pressure Point missed! The enemy shrugged it off."
+          self.phase = "player_anim"
+          self._anim_timer = 28
+          return
+      dmg = max(8, int((move.power + (self.player.max_hp // 20) + self.player.attack_bonus) * 1.5))
+      if self.enemy_defense_down > 0:
+          dmg = int(dmg * 1.5)
       self.enemy.take_damage(dmg)
-      self.message = f"You used {move.name}! It dealt {dmg} damage."
+      self.enemy_shake = 14
+      if move.name == "Flame Burst":
+          self.enemy_burn = 3
+          self.message = f"Flame Burst! {dmg} dmg — {self.enemy.name} is burning! (3 turns)"
+      else:
+          self.message = f"You used {move.name}! It dealt {dmg} damage."
       cd = MOVE_COOLDOWNS.get(move.name, 0)
       if cd:
           self.cooldowns[move.name] = cd
@@ -193,6 +261,10 @@ class BattleScreen:
       self._anim_timer = 28
 
   def update(self) -> None:
+      if self.enemy_shake > 0:
+          self.enemy_shake -= 1
+      if self.player_shake > 0:
+          self.player_shake -= 1
       if self.phase == "menu" or self.result:
           return
       self._anim_timer -= 1
@@ -204,6 +276,11 @@ class BattleScreen:
               self.message = f"{self.enemy.name} fainted! You win!"
               self.phase = "end"
               return
+          if self._skip_enemy_turn:
+              self._skip_enemy_turn = False
+              self.cooldowns = {k: v - 1 for k, v in self.cooldowns.items() if v > 1}
+              self.phase = "menu"
+              return
           self.phase = "enemy_anim"
           self._enemy_turn()
           self._anim_timer = 28
@@ -213,30 +290,84 @@ class BattleScreen:
               self.message = "You blacked out..."
               self.phase = "end"
               return
+          if self._give_turn_back:
+              self._give_turn_back = False
+              self.cooldowns = {k: v - 1 for k, v in self.cooldowns.items() if v > 1}
+              self.disabled_moves = {k: v - 1 for k, v in self.disabled_moves.items() if v > 1}
+              self.phase = "menu"
+              return
+          tick_msgs = []
+          if self.enemy_burn > 0:
+              burn_dmg = 8
+              self.enemy.take_damage(burn_dmg)
+              self.enemy_shake = 10
+              self.enemy_burn -= 1
+              tick_msgs.append(f"Burn: -{burn_dmg}HP ({self.enemy_burn} left)")
+              if not self.enemy.alive:
+                  self.result = "win"
+                  self.message = f"{self.enemy.name} burned to death! You win!"
+                  self.phase = "end"
+                  return
+          if self.player_poison > 0:
+              poison_dmg = 6
+              self.player.take_damage(poison_dmg)
+              self.player_shake = 10
+              self.player_poison -= 1
+              tick_msgs.append(f"Poison: -{poison_dmg}HP ({self.player_poison} left)")
+              if not self.player.alive:
+                  self.result = "lose"
+                  self.message = "Poison claimed your life..."
+                  self.phase = "end"
+                  return
           self.cooldowns = {k: v - 1 for k, v in self.cooldowns.items() if v > 1}
+          self.disabled_moves = {k: v - 1 for k, v in self.disabled_moves.items() if v > 1}
+          if self.enemy_defense_down > 0:
+              self.enemy_defense_down -= 1
           self.phase = "menu"
-          self.message = "What will you do?"
+          self.message = ("  ".join(tick_msgs) + " — What will you do?" if tick_msgs else "What will you do?")
 
   def _enemy_turn(self) -> None:
       import random
 
       move = random.choice(self.enemy.moves) if self.enemy.moves else Move("Strike", 12)
+      hit = True
       if self.dodge_active:
           self.dodge_active = False
           r = random.random()
           if r < 0.01:
               self.player.hp = 0
+              self.player_shake = 14
               self.message = f"{self.enemy.name} used {move.name}! CRITICAL — You were one-shotted!"
+              hit = False
           elif r < 0.41:
-              self.message = f"{self.enemy.name} used {move.name}! You dodged it! (0 damage)"
+              self.message = f"{self.enemy.name} used {move.name}! You dodged it! Your turn again."
+              self._give_turn_back = True
+              hit = False
           else:
-              dmg = max(6, move.power)
+              dmg = max(1, move.power - self.player.armor)
               self.player.take_damage(dmg)
+              self.player_shake = 14
               self.message = f"{self.enemy.name} used {move.name}! Dodge failed! ({dmg} damage)"
       else:
-          dmg = max(6, move.power)
+          dmg = max(1, move.power - self.player.armor)
           self.player.take_damage(dmg)
+          self.player_shake = 14
           self.message = f"{self.enemy.name} used {move.name}! ({dmg} damage)"
+
+      if hit:
+          extras = []
+          if random.random() < 0.35 and self.player_poison == 0 and not self.player.has_antidote:
+              self.player_poison = 3
+              extras.append("Poisoned! (3 turns)")
+          attack_moves = [m for m in self._current_moves()
+                          if m.name not in ("Dodge", "Heal", "Run", "Spare", "Finish")]
+          if attack_moves and random.random() < 0.30:
+              target = random.choice(attack_moves)
+              if self.disabled_moves.get(target.name, 0) == 0:
+                  self.disabled_moves[target.name] = 2
+                  extras.append(f"{target.name} disabled 2 turns!")
+          if extras:
+              self.message += "  " + "  ".join(extras)
 
   def _blit_sprite(
       self,
@@ -270,23 +401,42 @@ class BattleScreen:
                   int(BG_TOP[2] * (1 - t) + BG_BOTTOM[2] * t),
               )
               pygame.draw.line(surf, c, (0, y), (SCREEN_W, y))
-          ground = (88, 140, 72)
-          pygame.draw.rect(surf, ground, (0, SCREEN_H // 2, SCREEN_W, SCREEN_H // 2))
+          # Left half: dirt (player side), right half: grass (enemy side)
+          pygame.draw.rect(surf, (160, 110, 60), (0, SCREEN_H // 2, SCREEN_W // 2, SCREEN_H // 2))
+          pygame.draw.rect(surf, (88, 140, 72), (SCREEN_W // 2, SCREEN_H // 2, SCREEN_W // 2, SCREEN_H // 2))
 
-      # Enemy platform (top right)
-      ex, ey = SCREEN_W - 240, 80
-      pygame.draw.ellipse(surf, (60, 100, 56), (ex - 40, ey + 110, 160, 36))
-      self._blit_sprite(surf, self.enemy_sprite, self.enemy.sprite_color, ex, ey, 130, 130)
+      # Shake offsets (sinusoidal left-right wobble)
+      esx = int(math.sin(self.enemy_shake * 1.8) * 7) if self.enemy_shake > 0 else 0
+      psx = int(math.sin(self.player_shake * 1.8) * 7) if self.player_shake > 0 else 0
+
+      # Enemy platform (bottom right, on the grass)
+      ex, ey = SCREEN_W - 240, 175
+      pygame.draw.ellipse(surf, (50, 90, 46), (ex + esx, ey + 162, 200, 32))
+      self._blit_sprite(surf, self.enemy_sprite, self.enemy.sprite_color, ex + esx, ey, 200, 200)
       _draw_hp_bar(
-          surf, fonts["small"], SCREEN_W - 280, 24, 240,
-          self.enemy.name, self.enemy.hp, self.enemy.max_hp, align_right=True,
+          surf, fonts["small"], ex, ey - 76, 200,
+          self.enemy.name, self.enemy.hp, self.enemy.max_hp,
       )
+      if self.enemy_burn > 0 or self.enemy_defense_down > 0:
+          name_w = fonts["small"].size(self.enemy.name)[0]
+          bx = ex + name_w + 4
+          if self.enemy_burn > 0:
+              burn_badge = fonts["tiny"].render(f"  BURN {self.enemy_burn}", True, (255, 120, 30))
+              surf.blit(burn_badge, (bx, ey - 74))
+              bx += burn_badge.get_width()
+          if self.enemy_defense_down > 0:
+              def_badge = fonts["tiny"].render(f"  DEF↓ {self.enemy_defense_down}", True, (100, 200, 255))
+              surf.blit(def_badge, (bx, ey - 74))
 
-      # Player platform (bottom left)
-      px, py = 100, SCREEN_H // 2 + 10
-      pygame.draw.ellipse(surf, (60, 100, 56), (px - 20, py + 120, 160, 36))
-      self._blit_sprite(surf, self.player_sprite, self.player.sprite_color, px, py, 130, 130)
-      _draw_hp_bar(surf, fonts["small"], 32, SCREEN_H // 2 - 50, 220, "You", self.player.hp, self.player.max_hp)
+      # Player platform (bottom left, on dirt)
+      px, py = 60, 285
+      pygame.draw.ellipse(surf, (120, 80, 40), (px + psx, py + 162, 200, 32))
+      self._blit_sprite(surf, self.player_sprite, self.player.sprite_color, px + psx, py, 200, 200)
+      _draw_hp_bar(surf, fonts["small"], px, py - 76, 200, "You", self.player.hp, self.player.max_hp)
+      if self.player_poison > 0:
+          name_w = fonts["small"].size("You")[0]
+          poison_badge = fonts["tiny"].render(f"  POISON {self.player_poison}", True, (100, 220, 80))
+          surf.blit(poison_badge, (px + name_w + 4, py - 74))
 
       # Message + move panel (Pokemon layout)
       panel_h = 168
@@ -318,16 +468,26 @@ class BattleScreen:
               cell_h - 4,
           )
           on_cd = self.cooldowns.get(mv.name, 0) > 0
-          sel = i == self.selected_move and self.phase == "menu" and not on_cd
-          color = ACCENT if sel else ((160, 160, 168) if on_cd else (220, 220, 228))
+          disabled = self.disabled_moves.get(mv.name, 0) > 0
+          sel = i == self.selected_move and self.phase == "menu" and not on_cd and not disabled
+          color = ACCENT if sel else ((110, 60, 60) if disabled else (160, 160, 168) if on_cd else (220, 220, 228))
           pygame.draw.rect(surf, color, r, border_radius=4)
           pygame.draw.rect(surf, PANEL_BORDER, r, 1, border_radius=4)
-          name_color = (140, 140, 148) if on_cd else TEXT
+          name_color = (200, 80, 80) if disabled else (140, 140, 148) if on_cd else TEXT
           name_s = fonts["small"].render(mv.name, True, name_color)
           surf.blit(name_s, (r.x + 8, r.y + 8))
-          if on_cd:
+          if disabled:
+              dis_txt = fonts["tiny"].render(f"DISABLED {self.disabled_moves[mv.name]} turns", True, (220, 100, 100))
+              surf.blit(dis_txt, (r.x + 8, r.y + 28))
+          elif on_cd:
               cd_txt = fonts["tiny"].render(f"CD: {self.cooldowns[mv.name]} turns", True, (180, 80, 80))
               surf.blit(cd_txt, (r.x + 8, r.y + 28))
+          elif mv.name == "M79 Shot":
+              info = fonts["tiny"].render(f"Dmg 48  Shells: {self.m79_charges}", True, (255, 180, 50))
+              surf.blit(info, (r.x + 8, r.y + 28))
+          elif mv.name == "Pressure Point":
+              info = fonts["tiny"].render("30%back 30%def↓ 20%stun 20%miss", True, (180, 140, 255))
+              surf.blit(info, (r.x + 8, r.y + 28))
           elif mv.name == "Dodge":
               info = fonts["tiny"].render("40% dodge / 1% die", True, (80, 80, 96))
               surf.blit(info, (r.x + 8, r.y + 28))
@@ -338,6 +498,9 @@ class BattleScreen:
               actual = max(40, mv.power)
               pwr = fonts["tiny"].render(f"Dmg {actual}", True, (80, 80, 96))
               surf.blit(pwr, (r.x + 8, r.y + 28))
+          elif mv.name == "Heal":
+              info = fonts["tiny"].render("Restore 25 HP  CD:4", True, (80, 180, 80))
+              surf.blit(info, (r.x + 8, r.y + 28))
           elif mv.name == "Spare":
               pass
           elif mv.power:
@@ -345,7 +508,7 @@ class BattleScreen:
               pwr = fonts["tiny"].render(f"Dmg {actual}", True, (80, 80, 96))
               surf.blit(pwr, (r.x + 8, r.y + 28))
 
-      hint = fonts["tiny"].render("Arrows: select  |  Enter: confirm", True, TEXT_LIGHT)
+      hint = fonts["tiny"].render("Arrows: select  |  Enter: confirm  |  Q: Items", True, TEXT_LIGHT)
       surf.blit(hint, (16, 8))
 
   def _blit_wrapped(self, surf, font, text, rect):

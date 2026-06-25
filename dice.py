@@ -3,9 +3,9 @@
 import random
 from constants import DIFFICULTY_LABELS
 
-# Weights 50 / 30 / 20 / 10 (normalized)
+# Weights must sum to 100 so all tiers can fire
 _TIERS = (
-    ("worst", (1, 6), 50),
+    ("worst", (1, 6), 40),
     ("normal", (7, 10), 30),
     ("good", (11, 16), 20),
     ("best", (17, 20), 10),
