@@ -5,7 +5,6 @@ Pokemon-style battles + weighted d20 difficulty before fights.
 
 from __future__ import annotations
 
-import datetime
 import json
 import os
 import sys
@@ -39,8 +38,137 @@ class Mode(Enum):
     ENDING = auto()
     SHOP = auto()
     PRE_FIGHT = auto()
-    SAVE_MENU = auto()
-    LOAD_MENU = auto()
+    TUTORIAL = auto()
+    SAVE_SLOT = auto()
+
+
+TUTORIAL_PAGES = [
+    {
+        "title": "Story & Navigation",
+        "lines": [
+            "Mind Hack Gin is a choice-driven adventure with turn-based battles.",
+            "",
+            "  Enter / Space  — advance text or confirm a choice",
+            "  Up / Down (or W/S)  — move between choices",
+            "",
+            "Read each scene carefully — your choices shape the story and",
+            "determine which of the 16 different endings you reach.",
+            "",
+            "Tip: You can replay the game to discover all endings!",
+        ],
+    },
+    {
+        "title": "Dice Roll System",
+        "lines": [
+            "Before every fight a weighted d20 is rolled to set difficulty.",
+            "",
+            "  1 – 6   (40%)  HARD FIGHT   — enemy HP ×1.55",
+            "  7 – 10  (30%)  NORMAL       — enemy HP ×1.00",
+            "  11 – 16 (20%)  EASIER       — enemy HP ×0.82",
+            "  17 – 20 (10%)  LUCKY        — enemy HP ×0.68",
+            "",
+            "High roll = weaker enemy. Visit the Shop before rolling",
+            "to spend coins on upgrades and tilt the odds in your favour.",
+        ],
+    },
+    {
+        "title": "Battle System",
+        "lines": [
+            "Battles are turn-based — you act first, then the enemy.",
+            "",
+            "  Up / Down (or W/S)  — pick a move",
+            "  Enter / Space        — confirm move",
+            "",
+            "Your Moves:",
+            "  Punch / Pressure Point — deal damage",
+            "  Dodge                  — reduce next enemy hit",
+            "  Heal                   — recover HP",
+            "  Flame Burst / M79 Shot / Sap Splash — special attacks",
+            "",
+            "Watch your HP bar — if it hits 0 you get a Bad Ending.",
+        ],
+    },
+    {
+        "title": "Using Items in Battle",
+        "lines": [
+            "You can use items from your bag during the menu phase of battle.",
+            "",
+            "  Q  — open / close the item bag",
+            "  Up / Down  — scroll items",
+            "  Enter       — use selected item",
+            "  Q or Esc    — close without using",
+            "",
+            "Item effects:",
+            "  Medkit     — restore 40 HP",
+            "  Elixir     — restore full HP",
+            "  Smoke Bomb — escape the battle instantly",
+            "  Grenade    — deal 30 damage to the enemy",
+        ],
+    },
+    {
+        "title": "The Shop",
+        "lines": [
+            "A Shop appears before each battle. Spend coins wisely!",
+            "",
+            "  Medkit (15)         — restore 50 HP immediately",
+            "  Power Shard (20)    — +8 attack damage permanently",
+            "  Antidote (10)       — auto-cure poison in battle",
+            "  Shield Shard (15)   — -4 damage from all enemy hits",
+            "  Mystery Box (8)     — 30% chance: random battle item",
+            "  Pressure Point (45) — replaces Punch with a combo move",
+            "  M79 Launcher (35)   — 2 shells of 48 damage each",
+            "",
+            "You earn 20 coins for every battle you win.",
+        ],
+    },
+    {
+        "title": "Backpack & Key Items",
+        "lines": [
+            "Some story choices add key items to your backpack.",
+            "These are NOT shop items — they are found in the world.",
+            "",
+            "  Ruellia tuberosa — essential herb for the final plan.",
+            "                     Pick it up early or lose the good ending!",
+            "  Sap in a jar     — crafting ingredient for the flamethrower.",
+            "  Flamethrower     — unlocks Flame Burst move in battle.",
+            "",
+            "Always check what's in your backpack (shown at the bottom",
+            "of every story screen) before making decisions.",
+        ],
+    },
+    {
+        "title": "Saving & Loading",
+        "lines": [
+            "You can save your progress at any time during the story.",
+            "",
+            "  F5          — open Save Menu (during story or choice screens)",
+            "  L           — open Load Menu (from the title screen)",
+            "  Up / Down   — pick a save slot (3 slots available)",
+            "  Enter       — save / load",
+            "  Esc         — cancel and go back",
+            "",
+            "Save files record your chapter, HP, coins, backpack,",
+            "all upgrades, and which endings you have already seen.",
+        ],
+    },
+    {
+        "title": "Tips & Secrets",
+        "lines": [
+            "  * Pick up Ruellia tuberosa at the very first choice —",
+            "    you need it for the only Good Ending.",
+            "",
+            "  * Hide from the infected horde; fighting or fleeing leads",
+            "    to bad endings.",
+            "",
+            "  * Always craft the flamethrower — skipping it ends badly.",
+            "",
+            "  * Roll the dice after shopping, not before. You can visit",
+            "    the shop as many times as you can afford.",
+            "",
+            "  * There are 16 endings to collect. Can you find them all?",
+        ],
+    },
+]
 
 
 # --- Player build through story ---
@@ -251,9 +379,9 @@ class Game:
         self.item_menu_open = False
         self.item_cursor = 0
         self.assets = AssetManager()
-        self.save_slot_cursor = 0
-        self.save_message = ""
-        self._pre_save_mode: Mode | None = None
+        self.tutorial_page = 0
+        self._pre_slot_mode: Mode | None = None
+        self.gs.endings_seen = self._load_endings()
 
     def run(self):
         while True:
@@ -274,58 +402,50 @@ class Game:
             self.mode = Mode.STORY
             self._load_story("intro")
         elif self.mode == Mode.TITLE and event.key == pygame.K_l:
-            self.save_slot_cursor = 0
-            self.save_message = ""
-            self.mode = Mode.LOAD_MENU
-        elif self.mode == Mode.LOAD_MENU:
-            if event.key in (pygame.K_UP, pygame.K_w):
-                self.save_slot_cursor = (self.save_slot_cursor - 1) % 3
-                self.save_message = ""
-            elif event.key in (pygame.K_DOWN, pygame.K_s):
-                self.save_slot_cursor = (self.save_slot_cursor + 1) % 3
-                self.save_message = ""
-            elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                if self._load_game(self.save_slot_cursor + 1):
-                    self.save_message = ""
+            loaded = self._load_slot()
+            if loaded:
+                self.gs.endings_seen = loaded
+        elif self.mode == Mode.TITLE and event.key == pygame.K_t:
+            self.tutorial_page = 0
+            self.mode = Mode.TUTORIAL
+        elif self.mode == Mode.TUTORIAL:
+            if event.key in (pygame.K_RIGHT, pygame.K_d, pygame.K_RETURN, pygame.K_SPACE):
+                if self.tutorial_page < len(TUTORIAL_PAGES) - 1:
+                    self.tutorial_page += 1
                 else:
-                    self.save_message = "No save in this slot!"
+                    self.mode = Mode.TITLE
+            elif event.key in (pygame.K_LEFT, pygame.K_a):
+                if self.tutorial_page > 0:
+                    self.tutorial_page -= 1
             elif event.key == pygame.K_ESCAPE:
                 self.mode = Mode.TITLE
-                self.save_message = ""
-        elif self.mode == Mode.SAVE_MENU:
-            if event.key in (pygame.K_UP, pygame.K_w):
-                self.save_slot_cursor = (self.save_slot_cursor - 1) % 3
-                self.save_message = ""
-            elif event.key in (pygame.K_DOWN, pygame.K_s):
-                self.save_slot_cursor = (self.save_slot_cursor + 1) % 3
-                self.save_message = ""
-            elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                slot = self.save_slot_cursor + 1
-                self._save_game(slot)
-                self.save_message = f"Saved to Slot {slot}!"
+        elif self.mode == Mode.SAVE_SLOT:
+            if event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                self._save_slot()
+                self.mode = self._pre_slot_mode or Mode.STORY
+                self._pre_slot_mode = None
             elif event.key == pygame.K_ESCAPE:
-                self.mode = self._pre_save_mode or Mode.STORY
-                self._pre_save_mode = None
-                self.save_message = ""
+                self.mode = self._pre_slot_mode or Mode.STORY
+                self._pre_slot_mode = None
         elif self.mode == Mode.ENDING and event.key in (pygame.K_RETURN, pygame.K_SPACE):
             saved_endings = list(self.gs.endings_seen)
-            self.mode = Mode.TITLE
             self.gs = GameState()
             self.gs.endings_seen = saved_endings
             self.item_menu_open = False
-        elif self.mode == Mode.STORY and event.key == pygame.K_F5:
-            self._pre_save_mode = self.mode
-            self.mode = Mode.SAVE_MENU
-            self.save_slot_cursor = 0
-            self.save_message = ""
+            self.battle = None
+            self.pending_battle = None
+            self.after_battle = None
+            self.ending_key = None
+            self.mode = Mode.TITLE
+        elif self.mode == Mode.STORY and event.key == pygame.K_x:
+            self._pre_slot_mode = self.mode
+            self.mode = Mode.SAVE_SLOT
         elif self.mode == Mode.STORY and event.key in (pygame.K_RETURN, pygame.K_SPACE):
             self._story_advance()
         elif self.mode == Mode.CHOICE:
-            if event.key == pygame.K_F5:
-                self._pre_save_mode = self.mode
-                self.mode = Mode.SAVE_MENU
-                self.save_slot_cursor = 0
-                self.save_message = ""
+            if event.key == pygame.K_x:
+                self._pre_slot_mode = self.mode
+                self.mode = Mode.SAVE_SLOT
             elif event.key in (pygame.K_UP, pygame.K_w):
                 self.choice_index = (self.choice_index - 1) % len(self._choices())
             elif event.key in (pygame.K_DOWN, pygame.K_s):
@@ -333,11 +453,9 @@ class Game:
             elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
                 self._pick_choice()
         elif self.mode == Mode.PRE_FIGHT:
-            if event.key == pygame.K_F5:
-                self._pre_save_mode = self.mode
-                self.mode = Mode.SAVE_MENU
-                self.save_slot_cursor = 0
-                self.save_message = ""
+            if event.key == pygame.K_x:
+                self._pre_slot_mode = self.mode
+                self.mode = Mode.SAVE_SLOT
             elif event.key in (pygame.K_UP, pygame.K_w, pygame.K_DOWN, pygame.K_s):
                 self.pre_fight_cursor = 1 - self.pre_fight_cursor
             elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
@@ -619,6 +737,7 @@ class Game:
     def _end(self, key: str):
         if key not in self.gs.endings_seen:
             self.gs.endings_seen.append(key)
+        self._save_endings()
         self.ending_key = key
         self.mode = Mode.ENDING
 
@@ -653,10 +772,10 @@ class Game:
             self._draw_ending()
         elif self.mode == Mode.SHOP:
             self._draw_shop()
-        elif self.mode == Mode.SAVE_MENU:
-            self._draw_slot_menu(is_load=False)
-        elif self.mode == Mode.LOAD_MENU:
-            self._draw_slot_menu(is_load=True)
+        elif self.mode == Mode.TUTORIAL:
+            self._draw_tutorial()
+        elif self.mode == Mode.SAVE_SLOT:
+            self._draw_save_slot()
 
     def _draw_outlined(self, font, text, color, outline_color, cx, y, outline=2):
         surf = font.render(text, True, color)
@@ -678,10 +797,11 @@ class Game:
             self._draw_outlined(self.fonts["title"], "Mind Hack Gin", ACCENT, (0, 0, 0), cx, 100, outline=3)
         self._draw_outlined(self.fonts["text"], "ZBR Outbreak — Roll the dice. Fight. Survive.", TEXT_LIGHT, (0, 0, 0), cx, 250, outline=2)
         self._draw_outlined(self.fonts["small"], "Press Enter to start", TEXT_LIGHT, (0, 0, 0), cx, 400, outline=2)
-        if any(self._get_save_info(s) for s in range(1, 4)):
-            self._draw_outlined(self.fonts["small"], "L — Load saved game", TEXT_LIGHT, (0, 0, 0), cx, 426, outline=2)
+        self._draw_outlined(self.fonts["small"], "T — Tutorial / How to Play", TEXT_LIGHT, (0, 0, 0), cx, 426, outline=2)
+        if self._get_save_info():
+            self._draw_outlined(self.fonts["small"], "L — Load save slot", TEXT_LIGHT, (0, 0, 0), cx, 452, outline=2)
         seen_text = f"Endings discovered: {len(self.gs.endings_seen)} / {len(ENDINGS)}"
-        self._draw_outlined(self.fonts["tiny"], seen_text, TEXT_LIGHT, (0, 0, 0), cx, 456, outline=2)
+        self._draw_outlined(self.fonts["tiny"], seen_text, TEXT_LIGHT, (0, 0, 0), cx, 478, outline=2)
 
     def _draw_story_panel(self):
         story_img = self.assets.story_image(self.story_key)
@@ -750,7 +870,7 @@ class Game:
             self.fonts["text"], line, text_rect.x, text_rect.y + 20, text_rect.width
         )
         self._draw_backpack(text_rect.x, text_rect.bottom - 48)
-        hint = self.fonts["small"].render("Enter — continue   F5 — Save", True, (100, 100, 120))
+        hint = self.fonts["small"].render("Enter — continue   F5 — Save   [Auto-saved]", True, (100, 100, 120))
         self.screen.blit(hint, (text_rect.x, text_rect.bottom - 22))
 
     def _draw_choice(self):
@@ -999,162 +1119,139 @@ class Game:
         hint = self.fonts["small"].render("Up/Down — select   Enter — buy   Esc — leave shop", True, TEXT_LIGHT)
         self.screen.blit(hint, (SCREEN_W // 2 - hint.get_width() // 2, SCREEN_H - 50))
 
-    # ── Save / Load ────────────────────────────────────────────────────────
-    def _save_path(self, slot: int) -> str:
-        return os.path.join(os.path.dirname(os.path.abspath(__file__)), f"save_{slot}.json")
+    def _draw_tutorial(self):
+        self.screen.fill((18, 26, 48))
+        cx = SCREEN_W // 2
+        page = TUTORIAL_PAGES[self.tutorial_page]
+        total = len(TUTORIAL_PAGES)
 
-    def _get_save_info(self, slot: int) -> dict | None:
-        path = self._save_path(slot)
+        # Header bar
+        pygame.draw.rect(self.screen, (30, 44, 74), (0, 0, SCREEN_W, 72))
+        pygame.draw.line(self.screen, ACCENT, (0, 72), (SCREEN_W, 72), 2)
+        title_surf = self.fonts["heading"].render(page["title"], True, ACCENT)
+        self.screen.blit(title_surf, (cx - title_surf.get_width() // 2, 18))
+
+        # Page indicator dots
+        dot_y = 56
+        spacing = 18
+        start_x = cx - (total * spacing) // 2
+        for i in range(total):
+            color = ACCENT if i == self.tutorial_page else (80, 90, 120)
+            pygame.draw.circle(self.screen, color, (start_x + i * spacing, dot_y), 5 if i == self.tutorial_page else 3)
+
+        # Content panel
+        panel = pygame.Rect(60, 90, SCREEN_W - 120, SCREEN_H - 160)
+        pygame.draw.rect(self.screen, (26, 38, 62), panel, border_radius=12)
+        pygame.draw.rect(self.screen, (50, 70, 110), panel, 2, border_radius=12)
+
+        y = panel.y + 24
+        lh_text = self.fonts["text"].get_linesize()
+        lh_small = self.fonts["small"].get_linesize()
+        for raw_line in page["lines"]:
+            if raw_line == "":
+                y += lh_small // 2
+                continue
+            if raw_line.startswith("  ") and "—" in raw_line:
+                # Keyboard hint line — render key part in yellow, rest in light
+                parts = raw_line.split("—", 1)
+                key_surf = self.fonts["small"].render(parts[0].rstrip(), True, ACCENT)
+                self.screen.blit(key_surf, (panel.x + 24, y))
+                rest_surf = self.fonts["small"].render("— " + parts[1].lstrip(), True, TEXT_LIGHT)
+                self.screen.blit(rest_surf, (panel.x + 24 + key_surf.get_width() + 6, y))
+                y += lh_small + 2
+            elif raw_line.startswith("  *"):
+                tip_surf = self.fonts["small"].render(raw_line, True, (160, 220, 160))
+                self.screen.blit(tip_surf, (panel.x + 24, y))
+                y += lh_small + 2
+            elif raw_line.startswith("  "):
+                sub_surf = self.fonts["small"].render(raw_line, True, TEXT_LIGHT)
+                self.screen.blit(sub_surf, (panel.x + 24, y))
+                y += lh_small + 2
+            else:
+                y = self._blit_wrapped(self.fonts["text"], raw_line, panel.x + 24, y, panel.width - 48, TEXT_LIGHT)
+                y += 4
+
+        # Navigation footer
+        nav_y = SCREEN_H - 54
+        pygame.draw.line(self.screen, (50, 70, 110), (0, nav_y - 8), (SCREEN_W, nav_y - 8), 1)
+        if self.tutorial_page > 0:
+            prev_surf = self.fonts["small"].render("< A / Left — Previous", True, TEXT_LIGHT)
+            self.screen.blit(prev_surf, (80, nav_y))
+        page_label = self.fonts["small"].render(f"{self.tutorial_page + 1} / {total}", True, (120, 140, 180))
+        self.screen.blit(page_label, (cx - page_label.get_width() // 2, nav_y))
+        if self.tutorial_page < total - 1:
+            next_surf = self.fonts["small"].render("Enter / Right — Next >", True, TEXT_LIGHT)
+            self.screen.blit(next_surf, (SCREEN_W - 80 - next_surf.get_width(), nav_y))
+        else:
+            done_surf = self.fonts["small"].render("Enter — Back to Title", True, ACCENT)
+            self.screen.blit(done_surf, (SCREEN_W - 80 - done_surf.get_width(), nav_y))
+        esc_surf = self.fonts["tiny"].render("Esc — skip to title", True, (80, 90, 120))
+        self.screen.blit(esc_surf, (cx - esc_surf.get_width() // 2, nav_y + 22))
+
+    # ── Save slot (endings only) ────────────────────────────────────────────
+    def _slot_path(self) -> str:
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), "slot.json")
+
+    def _get_save_info(self) -> dict | None:
+        path = self._slot_path()
         if not os.path.exists(path):
             return None
         try:
             with open(path) as f:
-                data = json.load(f)
-            gs_d = data.get("gs", {})
-            return {
-                "timestamp": data.get("timestamp", "Unknown"),
-                "chapter":   gs_d.get("chapter", "?"),
-                "hp":        gs_d.get("player_hp", 0),
-                "max_hp":    gs_d.get("player_max_hp", 100),
-                "coins":     gs_d.get("coins", 0),
-            }
+                return json.load(f)
         except Exception:
             return None
 
-    def _save_game(self, slot: int) -> None:
-        gs = self.gs
-        saved_mode = (self._pre_save_mode or self.mode).name
-        data = {
-            "timestamp":            datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "chapter":              gs.chapter,
-            "mode":                 saved_mode,
-            "story_key":            self.story_key,
-            "line_index":           self.line_index,
-            "pending_battle":       self.pending_battle,
-            "after_battle":         self.after_battle,
-            "battle_can_flee":      getattr(self, "_battle_can_flee", True),
-            "final_spare_available": self.final_spare_available,
-            "gs": {
-                "backpack":          gs.backpack,
-                "has_ruellia":       gs.has_ruellia,
-                "has_flamethrower":  gs.has_flamethrower,
-                "has_team":          gs.has_team,
-                "player_hp":         gs.player_hp,
-                "player_max_hp":     gs.player_max_hp,
-                "endings_seen":      gs.endings_seen,
-                "chapter":           gs.chapter,
-                "coins":             gs.coins,
-                "attack_bonus":      gs.attack_bonus,
-                "armor":             gs.armor,
-                "has_antidote":      gs.has_antidote,
-                "has_pressure_point": gs.has_pressure_point,
-                "has_m79":           gs.has_m79,
-                "m79_charges":       gs.m79_charges,
-                "items":             gs.items,
-            },
-        }
-        with open(self._save_path(slot), "w") as f:
-            json.dump(data, f, indent=2)
-
-    def _load_game(self, slot: int) -> bool:
-        path = self._save_path(slot)
-        if not os.path.exists(path):
-            return False
+    def _save_slot(self) -> None:
         try:
-            with open(path) as f:
-                data = json.load(f)
-            gs_d = data["gs"]
-            gs = GameState()
-            gs.backpack          = gs_d["backpack"]
-            gs.has_ruellia       = gs_d["has_ruellia"]
-            gs.has_flamethrower  = gs_d["has_flamethrower"]
-            gs.has_team          = gs_d["has_team"]
-            gs.player_hp         = gs_d["player_hp"]
-            gs.player_max_hp     = gs_d["player_max_hp"]
-            gs.endings_seen      = gs_d["endings_seen"]
-            gs.chapter           = gs_d["chapter"]
-            gs.coins             = gs_d["coins"]
-            gs.attack_bonus      = gs_d["attack_bonus"]
-            gs.armor             = gs_d["armor"]
-            gs.has_antidote      = gs_d["has_antidote"]
-            gs.has_pressure_point = gs_d["has_pressure_point"]
-            gs.has_m79           = gs_d["has_m79"]
-            gs.m79_charges       = gs_d["m79_charges"]
-            gs.items             = gs_d.get("items", {})
-            self.gs = gs
-
-            self.story_key             = data["story_key"]
-            self.line_index            = data.get("line_index", 0)
-            self.pending_battle        = data.get("pending_battle")
-            self.after_battle          = data.get("after_battle")
-            self._battle_can_flee      = data.get("battle_can_flee", True)
-            self.final_spare_available = data.get("final_spare_available", False)
-            self.item_menu_open        = False
-            self.battle                = None
-
-            mode_name = data.get("mode", "STORY")
-            if mode_name == "PRE_FIGHT":
-                self.mode            = Mode.PRE_FIGHT
-                self.pre_fight_cursor = 1
-                self.dice_timer      = 90
-                self.dice_spin       = 0
-                self.dice_value      = 0
-            else:
-                story_data = STORY.get(self.story_key, {})
-                self.lines_shown  = list(story_data.get("lines", []))
-                self.choice_index = 0
-                choices = story_data.get("choices", [])
-                if mode_name == "CHOICE" and choices and not (len(choices) == 1 and choices[0][1] == "continue"):
-                    self.mode = Mode.CHOICE
-                else:
-                    self.mode = Mode.STORY
-            return True
+            with open(self._slot_path(), "w") as f:
+                json.dump({"endings_seen": self.gs.endings_seen}, f, indent=2)
         except Exception as e:
-            print(f"Load failed: {e}")
-            return False
+            print(f"Could not save slot: {e}")
 
-    def _draw_slot_menu(self, is_load: bool) -> None:
+    def _load_slot(self) -> list[str] | None:
+        info = self._get_save_info()
+        if info is None:
+            return None
+        return info.get("endings_seen", [])
+
+    def _draw_save_slot(self) -> None:
         self.screen.fill((20, 28, 48))
         cx = SCREEN_W // 2
-        title_text = "Load Game" if is_load else "Save Game"
-        title = self.fonts["heading"].render(title_text, True, ACCENT)
+        title = self.fonts["heading"].render("Save Slot", True, ACCENT)
         self.screen.blit(title, (cx - title.get_width() // 2, 60))
 
-        for i in range(3):
-            slot = i + 1
-            info = self._get_save_info(slot)
-            sel  = i == self.save_slot_cursor
-            rect = pygame.Rect(cx - 280, 140 + i * 120, 560, 100)
-            pygame.draw.rect(self.screen, (55, 75, 110) if sel else (32, 44, 68), rect, border_radius=10)
-            if sel:
-                pygame.draw.rect(self.screen, ACCENT, rect, 2, border_radius=10)
+        rect = pygame.Rect(cx - 240, 150, 480, 100)
+        pygame.draw.rect(self.screen, (55, 75, 110), rect, border_radius=10)
+        pygame.draw.rect(self.screen, ACCENT, rect, 2, border_radius=10)
 
-            slot_label = self.fonts["small"].render(f"Slot {slot}", True, ACCENT if sel else TEXT_LIGHT)
-            self.screen.blit(slot_label, (rect.x + 16, rect.y + 10))
+        n = len(self.gs.endings_seen)
+        tot = len(ENDINGS)
+        label = self.fonts["small"].render("Slot 1", True, ACCENT)
+        detail = self.fonts["text"].render(f"Endings collected: {n} / {tot}", True, TEXT_LIGHT)
+        self.screen.blit(label, (rect.x + 16, rect.y + 14))
+        self.screen.blit(detail, (rect.x + 16, rect.y + 52))
 
-            if info:
-                self.screen.blit(
-                    self.fonts["small"].render(info["timestamp"], True, (180, 200, 220)),
-                    (rect.x + 16, rect.y + 36),
-                )
-                detail = f"Chapter: {info['chapter']}   HP: {info['hp']}/{info['max_hp']}   Coins: {info['coins']}"
-                self.screen.blit(
-                    self.fonts["tiny"].render(detail, True, TEXT_LIGHT),
-                    (rect.x + 16, rect.y + 62),
-                )
-            else:
-                empty = self.fonts["small"].render("— Empty —", True, (100, 110, 130))
-                self.screen.blit(empty, (rect.x + 16, rect.y + 36))
-
-        if self.save_message:
-            msg_color = (100, 240, 140) if "Saved" in self.save_message else (240, 100, 100)
-            msg = self.fonts["text"].render(self.save_message, True, msg_color)
-            self.screen.blit(msg, (cx - msg.get_width() // 2, SCREEN_H - 80))
-
-        action = "load" if is_load else "save"
-        hint_text = f"Up/Down — select   Enter — {action}   Esc — back"
-        hint = self.fonts["small"].render(hint_text, True, TEXT_LIGHT)
+        hint = self.fonts["small"].render("Enter — save   Esc — back", True, TEXT_LIGHT)
         self.screen.blit(hint, (cx - hint.get_width() // 2, SCREEN_H - 40))
+
+    # ── Endings persistence ─────────────────────────────────────────────────
+    def _endings_path(self) -> str:
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), "endings.json")
+
+    def _save_endings(self) -> None:
+        try:
+            with open(self._endings_path(), "w") as f:
+                json.dump({"endings_seen": self.gs.endings_seen}, f, indent=2)
+        except Exception as e:
+            print(f"Could not save endings: {e}")
+
+    def _load_endings(self) -> list[str]:
+        try:
+            with open(self._endings_path()) as f:
+                return json.load(f).get("endings_seen", [])
+        except Exception:
+            return []
 
 
 if __name__ == "__main__":
