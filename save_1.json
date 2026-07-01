@@ -1,31 +1,27 @@
 {
-  "timestamp": "2026-06-25 16:49",
-  "chapter": "intro",
-  "mode": "CHOICE",
-  "story_key": "intro",
-  "line_index": 0,
+  "timestamp": "2026-07-01 15:46",
+  "chapter": "note",
+  "mode": "PRE_FIGHT",
+  "story_key": "note",
+  "line_index": 1,
   "pending_battle": "rafflesia_young",
   "after_battle": "after_first_rafflesia",
   "battle_can_flee": true,
   "final_spare_available": false,
   "gs": {
-    "backpack": [],
-    "has_ruellia": false,
+    "backpack": [
+      "Ruellia tuberosa"
+    ],
+    "has_ruellia": true,
     "has_flamethrower": false,
     "has_team": false,
     "player_hp": 100,
     "player_max_hp": 100,
     "endings_seen": [
       "bad_start",
-      "sundew",
-      "no_camp",
-      "trip_rock",
-      "no_test",
-      "defend_swarm",
-      "fight_horde",
-      "run_horde"
+      "fight_horde"
     ],
-    "chapter": "intro",
+    "chapter": "note",
     "coins": 30,
     "attack_bonus": 0,
     "armor": 0,
