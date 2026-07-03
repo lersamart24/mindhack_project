@@ -659,6 +659,7 @@ class Game:
             background=self.assets.battle_bg,
             player_sprite=self.assets.player_sprite,
             enemy_sprite=self.assets.enemy_sprite(enemy_key),
+            player_poses=self.assets.player_poses,
             m79_charges=self.gs.m79_charges if self.gs.has_m79 else 0,
         )
         self.mode = Mode.BATTLE
@@ -994,8 +995,14 @@ class Game:
                 sel = i == self.item_cursor
                 col = ACCENT if sel else TEXT_LIGHT
                 idef = USABLE_ITEMS.get(name, {})
+                icon = self.assets.item_icon(name)
+                text_x = panel.x + 16
+                if icon:
+                    scaled = pygame.transform.smoothscale(icon, (32, 32))
+                    self.screen.blit(scaled, (panel.x + 16, y - 4))
+                    text_x += 40
                 label = f"{'> ' if sel else '  '}{name} (x{self.gs.items[name]})  —  {idef.get('desc', '')}"
-                self.screen.blit(self.fonts["small"].render(label, True, col), (panel.x + 16, y))
+                self.screen.blit(self.fonts["small"].render(label, True, col), (text_x, y))
         hint = self.fonts["tiny"].render("Up/Down — select   Enter — use", True, TEXT_LIGHT)
         self.screen.blit(hint, (panel.x + 14, panel.bottom - 26))
 

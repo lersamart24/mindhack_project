@@ -86,6 +86,16 @@ def _draw_hp_bar(
 
 MOVE_COOLDOWNS = {"Flame Burst": 3, "Sap Splash": 2, "Dodge": 2, "Heal": 4, "Pressure Point": 3}
 
+POSE_FOR_MOVE = {
+    "Punch": "punch",
+    "Sap Splash": "punch",
+    "Pressure Point": "punch",
+    "Heal": "heal",
+    "M79 Shot": "m79",
+    "Flame Burst": "flame",
+    "Finish": "flame",
+}
+
 
 class BattleScreen:
   """Full battle UI: dice result already applied to enemy stats."""
@@ -101,6 +111,7 @@ class BattleScreen:
       background: pygame.Surface | None = None,
       player_sprite: pygame.Surface | None = None,
       enemy_sprite: pygame.Surface | None = None,
+      player_poses: dict[str, pygame.Surface | None] | None = None,
       m79_charges: int = 0,
   ):
       self.player = player
@@ -112,6 +123,7 @@ class BattleScreen:
       self.background = background
       self.player_sprite = player_sprite
       self.enemy_sprite = enemy_sprite
+      self.player_poses = player_poses or {}
       self.message = f"Wild {enemy.name} appeared! (Roll: {dice_value} — {dice_label})"
       self.phase = "menu"  # menu | player_anim | enemy_anim | end
       self.result: str | None = None  # win | lose | flee | spare
@@ -369,6 +381,15 @@ class BattleScreen:
           if extras:
               self.message += "  " + "  ".join(extras)
 
+  def _current_player_sprite(self) -> pygame.Surface | None:
+      if self.player_poses and self.phase == "player_anim" and self.last_move_name:
+          key = POSE_FOR_MOVE.get(self.last_move_name)
+          if key:
+              pose = self.player_poses.get(key)
+              if pose:
+                  return pose
+      return self.player_sprite
+
   def _blit_sprite(
       self,
       surf: pygame.Surface,
@@ -431,7 +452,7 @@ class BattleScreen:
       # Player platform (bottom left, on dirt)
       px, py = 60, 285
       pygame.draw.ellipse(surf, (120, 80, 40), (px + psx, py + 162, 200, 32))
-      self._blit_sprite(surf, self.player_sprite, self.player.sprite_color, px + psx, py, 200, 200)
+      self._blit_sprite(surf, self._current_player_sprite(), self.player.sprite_color, px + psx, py, 200, 200)
       _draw_hp_bar(surf, fonts["small"], px, py - 76, 200, "You", self.player.hp, self.player.max_hp)
       if self.player_poison > 0:
           name_w = fonts["small"].size("You")[0]

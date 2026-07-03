@@ -41,6 +41,15 @@ ITEM_ICONS = {
     "lighter": "items/lighter.png",
     "stick": "items/stick.png",
     "flamethrower": "items/flamethrower.png",
+    "Elixir": "items/elixir.png",
+    "Smoke Bomb": "items/smoke_bomb.png",
+}
+
+PLAYER_POSES = {
+    "heal": "sprites/player_pose_heal.png",
+    "m79": "sprites/player_pose_m79.png",
+    "flame": "sprites/player_pose_flame.png",
+    "punch": "sprites/player_pose_punch.png",
 }
 
 
@@ -71,6 +80,7 @@ class AssetManager:
         self.dice_d20 = self.get("ui/dice_d20.png")
         self.dice_glow_hard = self.get("ui/dice_glow_hard.png")
         self.dice_glow_lucky = self.get("ui/dice_glow_lucky.png")
+        self.player_poses = {key: self.get(rel) for key, rel in PLAYER_POSES.items()}
         self.player_sprite = self.get("sprites/player_battle_back.png")
 
     def get(self, rel: str) -> pygame.Surface | None:
