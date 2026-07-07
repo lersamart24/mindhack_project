@@ -5,6 +5,7 @@ Pokemon-style battles + weighted d20 difficulty before fights.
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import sys
@@ -13,7 +14,7 @@ from enum import Enum, auto
 import pygame
 
 from assets import AssetManager
-from battle import BattleScreen, Fighter, Move
+from battle import HEAL_ANIM_FRAMES, BattleScreen, Fighter, Move
 from constants import (
     ACCENT,
     DICE_BAD,
@@ -39,7 +40,8 @@ class Mode(Enum):
     SHOP = auto()
     PRE_FIGHT = auto()
     TUTORIAL = auto()
-    SAVE_SLOT = auto()
+    SAVE_MENU = auto()
+    LOAD_MENU = auto()
 
 
 TUTORIAL_PAGES = [
@@ -190,6 +192,7 @@ class GameState:
         self.has_m79 = False
         self.m79_charges = 0
         self.items: dict[str, int] = {}
+        self.god_mode = False
 
 
 SHOP_ITEMS = [
@@ -220,11 +223,11 @@ PLAYER_MOVES = [
 ]
 
 ENEMIES = {
-    "infected": ("ZBR Infected", 55, (160, 80, 120), [Move("Scratch", 18), Move("Bite", 22)]),
-    "horde": ("Infected Horde", 70, (140, 60, 100), [Move("Swarm", 24), Move("Grab", 20)]),
-    "rafflesia_young": ("Rafflesia", 80, (200, 40, 80), [Move("Spore", 22), Move("Vine Lash", 26)]),
-    "rafflesia_strong": ("Giant Rafflesia", 100, (180, 30, 70), [Move("Crush", 30), Move("Spore Cloud", 24)]),
-    "rafflesia_final": ("Corrupted Rafflesia", 75, (160, 20, 60), [Move("Devour", 32), Move("Root Bind", 28)]),
+    "infected": ("ZBR Infected", 60, (160, 80, 120), [Move("Scratch", 20), Move("Bite", 25)]),
+    "horde": ("Infected Horde", 75, (140, 60, 100), [Move("Swarm", 27), Move("Grab", 23)]),
+    "rafflesia_young": ("Rafflesia", 86, (200, 40, 80), [Move("Spore", 25), Move("Vine Lash", 29)]),
+    "rafflesia_strong": ("Giant Rafflesia", 108, (180, 30, 70), [Move("Crush", 34), Move("Spore Cloud", 27)]),
+    "rafflesia_final": ("Corrupted Rafflesia", 80, (160, 20, 60), [Move("Devour", 36), Move("Root Bind", 31)]),
 }
 
 
@@ -240,7 +243,8 @@ def player_fighter(gs: GameState) -> Fighter:
     if "sap in a jar" in gs.backpack:
         moves.append(Move("Sap Splash", 16))
     f = Fighter("Survivor", gs.player_max_hp, moves[:4], (80, 140, 220),
-                attack_bonus=gs.attack_bonus, armor=gs.armor, has_antidote=gs.has_antidote)
+                attack_bonus=gs.attack_bonus, armor=gs.armor, has_antidote=gs.has_antidote,
+                invincible=gs.god_mode, one_shot=gs.god_mode)
     f.hp = gs.player_hp
     return f
 
@@ -380,7 +384,9 @@ class Game:
         self.item_cursor = 0
         self.assets = AssetManager()
         self.tutorial_page = 0
-        self._pre_slot_mode: Mode | None = None
+        self.save_slot_cursor = 0
+        self.save_message = ""
+        self._pre_save_mode: Mode | None = None
         self.gs.endings_seen = self._load_endings()
 
     def run(self):
@@ -398,13 +404,46 @@ class Game:
     def _handle(self, event: pygame.event.Event):
         if event.type != pygame.KEYDOWN:
             return
+        if event.key == pygame.K_F9:
+            self._toggle_god_mode()
+            return
         if self.mode == Mode.TITLE and event.key in (pygame.K_RETURN, pygame.K_SPACE):
             self.mode = Mode.STORY
             self._load_story("intro")
         elif self.mode == Mode.TITLE and event.key == pygame.K_l:
-            loaded = self._load_slot()
-            if loaded:
-                self.gs.endings_seen = loaded
+            self.save_slot_cursor = 0
+            self.save_message = ""
+            self.mode = Mode.LOAD_MENU
+        elif self.mode == Mode.LOAD_MENU:
+            if event.key in (pygame.K_UP, pygame.K_w):
+                self.save_slot_cursor = (self.save_slot_cursor - 1) % 3
+                self.save_message = ""
+            elif event.key in (pygame.K_DOWN, pygame.K_s):
+                self.save_slot_cursor = (self.save_slot_cursor + 1) % 3
+                self.save_message = ""
+            elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                if self._load_game(self.save_slot_cursor + 1):
+                    self.save_message = ""
+                else:
+                    self.save_message = "No save in this slot!"
+            elif event.key == pygame.K_ESCAPE:
+                self.mode = Mode.TITLE
+                self.save_message = ""
+        elif self.mode == Mode.SAVE_MENU:
+            if event.key in (pygame.K_UP, pygame.K_w):
+                self.save_slot_cursor = (self.save_slot_cursor - 1) % 3
+                self.save_message = ""
+            elif event.key in (pygame.K_DOWN, pygame.K_s):
+                self.save_slot_cursor = (self.save_slot_cursor + 1) % 3
+                self.save_message = ""
+            elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                slot = self.save_slot_cursor + 1
+                self._save_game(slot)
+                self.save_message = f"Saved to Slot {slot}!"
+            elif event.key == pygame.K_ESCAPE:
+                self.mode = self._pre_save_mode or Mode.STORY
+                self._pre_save_mode = None
+                self.save_message = ""
         elif self.mode == Mode.TITLE and event.key == pygame.K_t:
             self.tutorial_page = 0
             self.mode = Mode.TUTORIAL
@@ -419,14 +458,6 @@ class Game:
                     self.tutorial_page -= 1
             elif event.key == pygame.K_ESCAPE:
                 self.mode = Mode.TITLE
-        elif self.mode == Mode.SAVE_SLOT:
-            if event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                self._save_slot()
-                self.mode = self._pre_slot_mode or Mode.STORY
-                self._pre_slot_mode = None
-            elif event.key == pygame.K_ESCAPE:
-                self.mode = self._pre_slot_mode or Mode.STORY
-                self._pre_slot_mode = None
         elif self.mode == Mode.ENDING and event.key in (pygame.K_RETURN, pygame.K_SPACE):
             saved_endings = list(self.gs.endings_seen)
             self.gs = GameState()
@@ -437,15 +468,19 @@ class Game:
             self.after_battle = None
             self.ending_key = None
             self.mode = Mode.TITLE
-        elif self.mode == Mode.STORY and event.key == pygame.K_x:
-            self._pre_slot_mode = self.mode
-            self.mode = Mode.SAVE_SLOT
+        elif self.mode == Mode.STORY and event.key == pygame.K_F5:
+            self._pre_save_mode = self.mode
+            self.mode = Mode.SAVE_MENU
+            self.save_slot_cursor = 0
+            self.save_message = ""
         elif self.mode == Mode.STORY and event.key in (pygame.K_RETURN, pygame.K_SPACE):
             self._story_advance()
         elif self.mode == Mode.CHOICE:
-            if event.key == pygame.K_x:
-                self._pre_slot_mode = self.mode
-                self.mode = Mode.SAVE_SLOT
+            if event.key == pygame.K_F5:
+                self._pre_save_mode = self.mode
+                self.mode = Mode.SAVE_MENU
+                self.save_slot_cursor = 0
+                self.save_message = ""
             elif event.key in (pygame.K_UP, pygame.K_w):
                 self.choice_index = (self.choice_index - 1) % len(self._choices())
             elif event.key in (pygame.K_DOWN, pygame.K_s):
@@ -453,9 +488,11 @@ class Game:
             elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
                 self._pick_choice()
         elif self.mode == Mode.PRE_FIGHT:
-            if event.key == pygame.K_x:
-                self._pre_slot_mode = self.mode
-                self.mode = Mode.SAVE_SLOT
+            if event.key == pygame.K_F5:
+                self._pre_save_mode = self.mode
+                self.mode = Mode.SAVE_MENU
+                self.save_slot_cursor = 0
+                self.save_message = ""
             elif event.key in (pygame.K_UP, pygame.K_w, pygame.K_DOWN, pygame.K_s):
                 self.pre_fight_cursor = 1 - self.pre_fight_cursor
             elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
@@ -775,8 +812,13 @@ class Game:
             self._draw_shop()
         elif self.mode == Mode.TUTORIAL:
             self._draw_tutorial()
-        elif self.mode == Mode.SAVE_SLOT:
-            self._draw_save_slot()
+        elif self.mode == Mode.SAVE_MENU:
+            self._draw_slot_menu(is_load=False)
+        elif self.mode == Mode.LOAD_MENU:
+            self._draw_slot_menu(is_load=True)
+        if self.gs.god_mode:
+            tag = self.fonts["small"].render("GOD MODE (F9)", True, (255, 90, 90))
+            self.screen.blit(tag, (SCREEN_W - tag.get_width() - 12, 8))
 
     def _draw_outlined(self, font, text, color, outline_color, cx, y, outline=2):
         surf = font.render(text, True, color)
@@ -799,8 +841,8 @@ class Game:
         self._draw_outlined(self.fonts["text"], "ZBR Outbreak — Roll the dice. Fight. Survive.", TEXT_LIGHT, (0, 0, 0), cx, 250, outline=2)
         self._draw_outlined(self.fonts["small"], "Press Enter to start", TEXT_LIGHT, (0, 0, 0), cx, 400, outline=2)
         self._draw_outlined(self.fonts["small"], "T — Tutorial / How to Play", TEXT_LIGHT, (0, 0, 0), cx, 426, outline=2)
-        if self._get_save_info():
-            self._draw_outlined(self.fonts["small"], "L — Load save slot", TEXT_LIGHT, (0, 0, 0), cx, 452, outline=2)
+        if any(self._get_save_info(s) for s in range(1, 4)):
+            self._draw_outlined(self.fonts["small"], "L — Load saved game", TEXT_LIGHT, (0, 0, 0), cx, 452, outline=2)
         seen_text = f"Endings discovered: {len(self.gs.endings_seen)} / {len(ENDINGS)}"
         self._draw_outlined(self.fonts["tiny"], seen_text, TEXT_LIGHT, (0, 0, 0), cx, 478, outline=2)
 
@@ -871,7 +913,7 @@ class Game:
             self.fonts["text"], line, text_rect.x, text_rect.y + 20, text_rect.width
         )
         self._draw_backpack(text_rect.x, text_rect.bottom - 48)
-        hint = self.fonts["small"].render("Enter — continue   F5 — Save   [Auto-saved]", True, (100, 100, 120))
+        hint = self.fonts["small"].render("Enter — continue   F5 — Save", True, (100, 100, 120))
         self.screen.blit(hint, (text_rect.x, text_rect.bottom - 22))
 
     def _draw_choice(self):
@@ -1015,13 +1057,15 @@ class Game:
         idef = USABLE_ITEMS.get(name)
         if not idef:
             return
-        self.gs.items[name] -= 1
-        if self.gs.items[name] <= 0:
-            del self.gs.items[name]
+        if not self.gs.god_mode:
+            self.gs.items[name] -= 1
+            if self.gs.items[name] <= 0:
+                del self.gs.items[name]
         self.item_menu_open = False
         b = self.battle
         if not b:
             return
+        b.last_move_name = name
         t = idef["type"]
         if t == "heal":
             b.player.hp = min(b.player.max_hp, b.player.hp + idef["value"])
@@ -1029,20 +1073,34 @@ class Game:
             b.phase = "player_anim"
             b._anim_timer = 28
         elif t == "full_heal":
-            b.player.hp = b.player.max_hp
-            b.message = f"Used {name}! Full HP! Enemy attacks!"
+            b._heal_start_hp = b.player.hp
+            b._heal_end_hp = b.player.max_hp
+            b.message = f"Used {name}! Slowly recovering HP... Enemy attacks!"
             b.phase = "player_anim"
-            b._anim_timer = 28
+            b._anim_timer = HEAL_ANIM_FRAMES
         elif t == "flee":
-            b.result = "flee"
-            b.message = f"Used {name}! Escaped safely!"
-            b.phase = "end"
+            b._pending_flee = True
+            b.message = f"Used {name}! Smoke fills the air..."
+            b.phase = "player_anim"
+            b._anim_timer = 40
         elif t == "damage":
             b.enemy.take_damage(idef["value"])
             b.enemy_shake = 14
             b.message = f"Used {name}! Dealt {idef['value']} dmg. Enemy attacks!"
             b.phase = "player_anim"
             b._anim_timer = 28
+
+    def _toggle_god_mode(self):
+        self.gs.god_mode = not self.gs.god_mode
+        if self.gs.god_mode:
+            for name in USABLE_ITEMS:
+                self.gs.items[name] = 99
+            self.gs.coins = 999999
+        if self.battle:
+            self.battle.player.invincible = self.gs.god_mode
+            self.battle.player.one_shot = self.gs.god_mode
+            if self.gs.god_mode:
+                self.battle.player.hp = self.battle.player.max_hp
 
     def _open_shop(self, after: str):
         self.mode = Mode.SHOP
@@ -1195,51 +1253,161 @@ class Game:
         esc_surf = self.fonts["tiny"].render("Esc — skip to title", True, (80, 90, 120))
         self.screen.blit(esc_surf, (cx - esc_surf.get_width() // 2, nav_y + 22))
 
-    # ── Save slot (endings only) ────────────────────────────────────────────
-    def _slot_path(self) -> str:
-        return os.path.join(os.path.dirname(os.path.abspath(__file__)), "slot.json")
+    # ── Save / Load ────────────────────────────────────────────────────────
+    def _save_path(self, slot: int) -> str:
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), f"save_{slot}.json")
 
-    def _get_save_info(self) -> dict | None:
-        path = self._slot_path()
+    def _get_save_info(self, slot: int) -> dict | None:
+        path = self._save_path(slot)
         if not os.path.exists(path):
             return None
         try:
             with open(path) as f:
-                return json.load(f)
+                data = json.load(f)
+            gs_d = data.get("gs", {})
+            return {
+                "timestamp": data.get("timestamp", "Unknown"),
+                "chapter":   gs_d.get("chapter", "?"),
+                "hp":        gs_d.get("player_hp", 0),
+                "max_hp":    gs_d.get("player_max_hp", 100),
+                "coins":     gs_d.get("coins", 0),
+            }
         except Exception:
             return None
 
-    def _save_slot(self) -> None:
+    def _save_game(self, slot: int) -> None:
+        gs = self.gs
+        saved_mode = (self._pre_save_mode or self.mode).name
+        data = {
+            "timestamp":            datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "chapter":              gs.chapter,
+            "mode":                 saved_mode,
+            "story_key":            self.story_key,
+            "line_index":           self.line_index,
+            "pending_battle":       self.pending_battle,
+            "after_battle":         self.after_battle,
+            "battle_can_flee":      getattr(self, "_battle_can_flee", True),
+            "final_spare_available": self.final_spare_available,
+            "gs": {
+                "backpack":          gs.backpack,
+                "has_ruellia":       gs.has_ruellia,
+                "has_flamethrower":  gs.has_flamethrower,
+                "has_team":          gs.has_team,
+                "player_hp":         gs.player_hp,
+                "player_max_hp":     gs.player_max_hp,
+                "endings_seen":      gs.endings_seen,
+                "chapter":           gs.chapter,
+                "coins":             gs.coins,
+                "attack_bonus":      gs.attack_bonus,
+                "armor":             gs.armor,
+                "has_antidote":      gs.has_antidote,
+                "has_pressure_point": gs.has_pressure_point,
+                "has_m79":           gs.has_m79,
+                "m79_charges":       gs.m79_charges,
+                "items":             gs.items,
+            },
+        }
+        with open(self._save_path(slot), "w") as f:
+            json.dump(data, f, indent=2)
+
+    def _load_game(self, slot: int) -> bool:
+        path = self._save_path(slot)
+        if not os.path.exists(path):
+            return False
         try:
-            with open(self._slot_path(), "w") as f:
-                json.dump({"endings_seen": self.gs.endings_seen}, f, indent=2)
+            with open(path) as f:
+                data = json.load(f)
+            gs_d = data["gs"]
+            gs = GameState()
+            gs.backpack          = gs_d["backpack"]
+            gs.has_ruellia       = gs_d["has_ruellia"]
+            gs.has_flamethrower  = gs_d["has_flamethrower"]
+            gs.has_team          = gs_d["has_team"]
+            gs.player_hp         = gs_d["player_hp"]
+            gs.player_max_hp     = gs_d["player_max_hp"]
+            gs.endings_seen      = gs_d["endings_seen"]
+            gs.chapter           = gs_d["chapter"]
+            gs.coins             = gs_d["coins"]
+            gs.attack_bonus      = gs_d["attack_bonus"]
+            gs.armor             = gs_d["armor"]
+            gs.has_antidote      = gs_d["has_antidote"]
+            gs.has_pressure_point = gs_d["has_pressure_point"]
+            gs.has_m79           = gs_d["has_m79"]
+            gs.m79_charges       = gs_d["m79_charges"]
+            gs.items             = gs_d.get("items", {})
+            self.gs = gs
+
+            self.story_key             = data["story_key"]
+            self.line_index            = data.get("line_index", 0)
+            self.pending_battle        = data.get("pending_battle")
+            self.after_battle          = data.get("after_battle")
+            self._battle_can_flee      = data.get("battle_can_flee", True)
+            self.final_spare_available = data.get("final_spare_available", False)
+            self.item_menu_open        = False
+            self.battle                = None
+
+            mode_name = data.get("mode", "STORY")
+            if mode_name == "PRE_FIGHT":
+                self.mode            = Mode.PRE_FIGHT
+                self.pre_fight_cursor = 1
+                self.dice_timer      = 90
+                self.dice_spin       = 0
+                self.dice_value      = 0
+            else:
+                story_data = STORY.get(self.story_key, {})
+                self.lines_shown  = list(story_data.get("lines", []))
+                self.choice_index = 0
+                choices = story_data.get("choices", [])
+                if mode_name == "CHOICE" and choices and not (len(choices) == 1 and choices[0][1] == "continue"):
+                    self.mode = Mode.CHOICE
+                else:
+                    self.mode = Mode.STORY
+            return True
         except Exception as e:
-            print(f"Could not save slot: {e}")
+            print(f"Load failed: {e}")
+            return False
 
-    def _load_slot(self) -> list[str] | None:
-        info = self._get_save_info()
-        if info is None:
-            return None
-        return info.get("endings_seen", [])
-
-    def _draw_save_slot(self) -> None:
+    def _draw_slot_menu(self, is_load: bool) -> None:
         self.screen.fill((20, 28, 48))
         cx = SCREEN_W // 2
-        title = self.fonts["heading"].render("Save Slot", True, ACCENT)
+        title_text = "Load Game" if is_load else "Save Game"
+        title = self.fonts["heading"].render(title_text, True, ACCENT)
         self.screen.blit(title, (cx - title.get_width() // 2, 60))
 
-        rect = pygame.Rect(cx - 240, 150, 480, 100)
-        pygame.draw.rect(self.screen, (55, 75, 110), rect, border_radius=10)
-        pygame.draw.rect(self.screen, ACCENT, rect, 2, border_radius=10)
+        for i in range(3):
+            slot = i + 1
+            info = self._get_save_info(slot)
+            sel  = i == self.save_slot_cursor
+            rect = pygame.Rect(cx - 280, 140 + i * 120, 560, 100)
+            pygame.draw.rect(self.screen, (55, 75, 110) if sel else (32, 44, 68), rect, border_radius=10)
+            if sel:
+                pygame.draw.rect(self.screen, ACCENT, rect, 2, border_radius=10)
 
-        n = len(self.gs.endings_seen)
-        tot = len(ENDINGS)
-        label = self.fonts["small"].render("Slot 1", True, ACCENT)
-        detail = self.fonts["text"].render(f"Endings collected: {n} / {tot}", True, TEXT_LIGHT)
-        self.screen.blit(label, (rect.x + 16, rect.y + 14))
-        self.screen.blit(detail, (rect.x + 16, rect.y + 52))
+            slot_label = self.fonts["small"].render(f"Slot {slot}", True, ACCENT if sel else TEXT_LIGHT)
+            self.screen.blit(slot_label, (rect.x + 16, rect.y + 10))
 
-        hint = self.fonts["small"].render("Enter — save   Esc — back", True, TEXT_LIGHT)
+            if info:
+                self.screen.blit(
+                    self.fonts["small"].render(info["timestamp"], True, (180, 200, 220)),
+                    (rect.x + 16, rect.y + 36),
+                )
+                detail = f"Chapter: {info['chapter']}   HP: {info['hp']}/{info['max_hp']}   Coins: {info['coins']}"
+                self.screen.blit(
+                    self.fonts["tiny"].render(detail, True, TEXT_LIGHT),
+                    (rect.x + 16, rect.y + 62),
+                )
+            else:
+                empty = self.fonts["small"].render("— Empty —", True, (100, 110, 130))
+                self.screen.blit(empty, (rect.x + 16, rect.y + 36))
+
+        if self.save_message:
+            msg_color = (100, 240, 140) if "Saved" in self.save_message else (240, 100, 100)
+            msg = self.fonts["text"].render(self.save_message, True, msg_color)
+            self.screen.blit(msg, (cx - msg.get_width() // 2, SCREEN_H - 80))
+
+        action = "load" if is_load else "save"
+        hint_text = f"Up/Down — select   Enter — {action}   Esc — back"
+        hint = self.fonts["small"].render(hint_text, True, TEXT_LIGHT)
         self.screen.blit(hint, (cx - hint.get_width() // 2, SCREEN_H - 40))
 
     # ── Endings persistence ─────────────────────────────────────────────────

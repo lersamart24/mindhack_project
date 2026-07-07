@@ -41,8 +41,6 @@ ITEM_ICONS = {
     "lighter": "items/lighter.png",
     "stick": "items/stick.png",
     "flamethrower": "items/flamethrower.png",
-    "Elixir": "items/elixir.png",
-    "Smoke Bomb": "items/smoke_bomb.png",
 }
 
 PLAYER_POSES = {
@@ -50,6 +48,8 @@ PLAYER_POSES = {
     "m79": "sprites/player_pose_m79.png",
     "flame": "sprites/player_pose_flame.png",
     "punch": "sprites/player_pose_punch.png",
+    "elixir": "items/elixir.png",
+    "smoke": "items/smoke_bomb.png",
 }
 
 

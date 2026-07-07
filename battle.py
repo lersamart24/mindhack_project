@@ -32,7 +32,8 @@ class Move:
 
 class Fighter:
     def __init__(self, name: str, max_hp: int, moves: list[Move], sprite_color: tuple[int, int, int],
-                 attack_bonus: int = 0, armor: int = 0, has_antidote: bool = False):
+                 attack_bonus: int = 0, armor: int = 0, has_antidote: bool = False,
+                 invincible: bool = False, one_shot: bool = False):
         self.name = name
         self.max_hp = max_hp
         self.hp = max_hp
@@ -41,12 +42,16 @@ class Fighter:
         self.attack_bonus = attack_bonus
         self.armor = armor
         self.has_antidote = has_antidote
+        self.invincible = invincible
+        self.one_shot = one_shot
 
     @property
     def alive(self) -> bool:
         return self.hp > 0
 
     def take_damage(self, amount: int) -> None:
+        if self.invincible:
+            return
         self.hp = max(0, self.hp - amount)
 
 
@@ -84,7 +89,9 @@ def _draw_hp_bar(
     surf.blit(hp_text, (x, bar_y + 18))
 
 
-MOVE_COOLDOWNS = {"Flame Burst": 3, "Sap Splash": 2, "Dodge": 2, "Heal": 4, "Pressure Point": 3}
+MOVE_COOLDOWNS = {"Flame Burst": 3, "Sap Splash": 2, "Dodge": 2, "Heal": 6}
+HEAL_AMOUNT = 40
+HEAL_ANIM_FRAMES = 90
 
 POSE_FOR_MOVE = {
     "Punch": "punch",
@@ -94,6 +101,8 @@ POSE_FOR_MOVE = {
     "M79 Shot": "m79",
     "Flame Burst": "flame",
     "Finish": "flame",
+    "Elixir": "elixir",
+    "Smoke Bomb": "smoke",
 }
 
 
@@ -136,8 +145,11 @@ class BattleScreen:
       self.dodge_active = False
       self._skip_enemy_turn = False
       self._give_turn_back = False
+      self._pending_flee = False
       self.enemy_burn = 0
       self.player_poison = 0
+      self._heal_start_hp = 0
+      self._heal_end_hp = 0
       self.enemy_shake = 0
       self.player_shake = 0
       self.enemy_defense_down = 0
@@ -176,6 +188,11 @@ class BattleScreen:
           base = base + [Move("Run", 0, "Try to escape")]
       return base[:4]
 
+  def _hit_enemy(self, dmg: int) -> None:
+      if getattr(self.player, "one_shot", False):
+          dmg = self.enemy.hp
+      self.enemy.take_damage(dmg)
+
   def _execute_move(self, move: Move) -> None:
       import random
       self.last_move_name = move.name
@@ -186,7 +203,7 @@ class BattleScreen:
           return
       if move.name == "Finish":
           dmg = max(40, move.power)
-          self.enemy.take_damage(dmg)
+          self._hit_enemy(dmg)
           self.enemy_shake = 14
           self.message = f"You use {move.name}! Massive {dmg} damage!"
           self.phase = "player_anim"
@@ -217,16 +234,17 @@ class BattleScreen:
           self._anim_timer = 28
           return
       if move.name == "Heal":
-          heal = 25
-          self.player.hp = min(self.player.max_hp, self.player.hp + heal)
+          self._heal_start_hp = self.player.hp
+          self._heal_end_hp = min(self.player.max_hp, self.player.hp + HEAL_AMOUNT)
           self.cooldowns["Heal"] = MOVE_COOLDOWNS["Heal"]
-          self.message = f"You heal for {heal} HP! The zombie strikes back!"
+          self.message = "You focus and slowly get back up..."
           self.phase = "player_anim"
-          self._anim_timer = 28
+          self._anim_timer = HEAL_ANIM_FRAMES
+          self._skip_enemy_turn = True
           return
       if move.name == "M79 Shot":
           dmg = 48
-          self.enemy.take_damage(dmg)
+          self._hit_enemy(dmg)
           self.enemy_shake = 14
           self.m79_charges -= 1
           if self.m79_charges == 0:
@@ -259,7 +277,7 @@ class BattleScreen:
       dmg = max(8, int((move.power + (self.player.max_hp // 20) + self.player.attack_bonus) * 1.5))
       if self.enemy_defense_down > 0:
           dmg = int(dmg * 1.5)
-      self.enemy.take_damage(dmg)
+      self._hit_enemy(dmg)
       self.enemy_shake = 14
       if move.name == "Flame Burst":
           self.enemy_burn = 3
@@ -279,10 +297,22 @@ class BattleScreen:
           self.player_shake -= 1
       if self.phase == "menu" or self.result:
           return
+      if self.phase == "player_anim" and self.last_move_name in ("Heal", "Elixir") and self._anim_timer > 0:
+          elapsed = HEAL_ANIM_FRAMES - self._anim_timer
+          progress = min(1.0, elapsed / HEAL_ANIM_FRAMES)
+          self.player.hp = int(self._heal_start_hp + (self._heal_end_hp - self._heal_start_hp) * progress)
       self._anim_timer -= 1
       if self._anim_timer > 0:
           return
       if self.phase == "player_anim":
+          if self.last_move_name in ("Heal", "Elixir"):
+              self.player.hp = self._heal_end_hp
+          if self._pending_flee:
+              self._pending_flee = False
+              self.result = "flee"
+              self.message = "Vanished in the smoke — got away safely!"
+              self.phase = "end"
+              return
           if not self.enemy.alive:
               self.result = "win"
               self.message = f"{self.enemy.name} fainted! You win!"
@@ -368,12 +398,12 @@ class BattleScreen:
 
       if hit:
           extras = []
-          if random.random() < 0.35 and self.player_poison == 0 and not self.player.has_antidote:
+          if random.random() < 0.40 and self.player_poison == 0 and not self.player.has_antidote:
               self.player_poison = 3
               extras.append("Poisoned! (3 turns)")
           attack_moves = [m for m in self._current_moves()
                           if m.name not in ("Dodge", "Heal", "Run", "Spare", "Finish")]
-          if attack_moves and random.random() < 0.30:
+          if attack_moves and random.random() < 0.35:
               target = random.choice(attack_moves)
               if self.disabled_moves.get(target.name, 0) == 0:
                   self.disabled_moves[target.name] = 2
@@ -520,7 +550,10 @@ class BattleScreen:
               pwr = fonts["tiny"].render(f"Dmg {actual}", True, (80, 80, 96))
               surf.blit(pwr, (r.x + 8, r.y + 28))
           elif mv.name == "Heal":
-              info = fonts["tiny"].render("Restore 25 HP  CD:4", True, (80, 180, 80))
+              info = fonts["tiny"].render(
+                  f"Slowly restore {HEAL_AMOUNT} HP  CD:{MOVE_COOLDOWNS['Heal']}",
+                  True, (80, 180, 80),
+              )
               surf.blit(info, (r.x + 8, r.y + 28))
           elif mv.name == "Spare":
               pass

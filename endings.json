@@ -1,6 +1,9 @@
 {
   "endings_seen": [
     "fight_horde",
+    "bad_start",
+    "run_horde",
+    "good_win",
     "fight_early"
   ]
 }

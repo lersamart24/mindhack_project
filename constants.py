@@ -23,10 +23,10 @@ DICE_GOOD = (96, 180, 96)
 DICE_BEST = (96, 200, 255)
 
 DIFFICULTY_LABELS = {
-    "worst": ("HARD FIGHT", DICE_BAD, 1.55),
-    "normal": ("NORMAL", DICE_NORMAL, 1.0),
-    "good": ("EASIER", DICE_GOOD, 0.82),
-    "best": ("LUCKY", DICE_BEST, 0.68),
+    "worst": ("HARD FIGHT", DICE_BAD, 1.7),
+    "normal": ("NORMAL", DICE_NORMAL, 1.1),
+    "good": ("EASIER", DICE_GOOD, 0.88),
+    "best": ("LUCKY", DICE_BEST, 0.72),
 }
 
 ENDINGS = {
