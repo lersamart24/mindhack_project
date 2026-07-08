@@ -1,16 +1,18 @@
 {
-  "timestamp": "2026-07-07 16:19",
-  "chapter": "intro",
+  "timestamp": "2026-07-08 15:43",
+  "chapter": "horde_choice",
   "mode": "CHOICE",
-  "story_key": "intro",
+  "story_key": "horde_choice",
   "line_index": 0,
-  "pending_battle": null,
-  "after_battle": null,
+  "pending_battle": "rafflesia_young",
+  "after_battle": "after_first_rafflesia",
   "battle_can_flee": true,
   "final_spare_available": false,
   "gs": {
-    "backpack": [],
-    "has_ruellia": false,
+    "backpack": [
+      "Ruellia tuberosa"
+    ],
+    "has_ruellia": true,
     "has_flamethrower": false,
     "has_team": false,
     "player_hp": 100,
@@ -21,14 +23,19 @@
       "solo_rafflesia",
       "fight_early"
     ],
-    "chapter": "intro",
-    "coins": 30,
+    "chapter": "horde_choice",
+    "coins": 1000019,
     "attack_bonus": 0,
     "armor": 0,
     "has_antidote": false,
     "has_pressure_point": false,
     "has_m79": false,
     "m79_charges": 0,
-    "items": {}
+    "items": {
+      "Medkit": 99,
+      "Elixir": 99,
+      "Smoke Bomb": 99,
+      "Grenade": 99
+    }
   }
 }

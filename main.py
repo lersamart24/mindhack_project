@@ -116,7 +116,7 @@ TUTORIAL_PAGES = [
             "  Power Shard (20)    — +8 attack damage permanently",
             "  Antidote (10)       — auto-cure poison in battle",
             "  Shield Shard (15)   — -4 damage from all enemy hits",
-            "  Mystery Box (8)     — 30% chance: random battle item",
+            "  Mystery Box (8)     — 40% chance: random battle item",
             "  Pressure Point (45) — replaces Punch with a combo move",
             "  M79 Launcher (35)   — 2 shells of 48 damage each",
             "",
@@ -200,7 +200,7 @@ SHOP_ITEMS = [
     {"id": "power",          "name": "Power Shard",     "cost":  20, "desc": "+8 attack damage permanently"},
     {"id": "antidote",       "name": "Antidote",        "cost":  10, "desc": "Auto-cure poison in battle"},
     {"id": "shield",         "name": "Shield Shard",    "cost":  15, "desc": "-4 damage from all enemy hits"},
-    {"id": "random",         "name": "Mystery Box",     "cost":   8, "desc": "30% chance: random battle item!"},
+    {"id": "random",         "name": "Mystery Box",     "cost":   8, "desc": "40% chance: random battle item!"},
     {"id": "pressure_point", "name": "Pressure Point",  "cost":  45, "desc": "Fighting style — replaces Punch (30%back/30%def↓/20%stun/20%miss)"},
     {"id": "m79",            "name": "M79 Launcher",    "cost":  35, "desc": "2 shells of 48 dmg — replaces Flame Burst, reverts after"},
 ]
@@ -350,7 +350,7 @@ class Game:
     def __init__(self):
         pygame.init()
         pygame.display.set_caption("Mind Hack Gin — ZBR Outbreak")
-        self.screen = pygame.display.set_mode((SCREEN_W, SCREEN_H))
+        self.screen = pygame.display.set_mode((SCREEN_W, SCREEN_H), pygame.FULLSCREEN | pygame.SCALED)
         self.clock = pygame.time.Clock()
         self.fonts = {
             "title": pygame.font.SysFont("arial", 42, bold=True),
@@ -386,6 +386,10 @@ class Game:
         self.tutorial_page = 0
         self.save_slot_cursor = 0
         self.save_message = ""
+        self.music_tracks = self._load_music_tracks()
+        self.music_index = -1
+        if self.music_tracks:
+            self._play_next_track()
         self._pre_save_mode: Mode | None = None
         self.gs.endings_seen = self._load_endings()
 
@@ -397,11 +401,63 @@ class Game:
                     pygame.quit()
                     sys.exit()
                 self._handle(event)
+            self._update_music(dt)
             self._update(dt)
             self._draw()
             pygame.display.flip()
 
+    # ── Background music ─────────────────────────────────────────────────
+    def _load_music_tracks(self) -> list[str]:
+        folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sound_track")
+        if not os.path.isdir(folder):
+            return []
+        files = sorted(f for f in os.listdir(folder) if f.lower().endswith((".mp3", ".ogg", ".wav")))
+        return [os.path.join(folder, f) for f in files]
+
+    def _play_next_track(self) -> None:
+        self.music_index = (self.music_index + 1) % len(self.music_tracks)
+        try:
+            pygame.mixer.music.load(self.music_tracks[self.music_index])
+            pygame.mixer.music.play()
+        except pygame.error:
+            pass
+
+    def _update_music(self, dt: int) -> None:
+        if not self.music_tracks:
+            return
+        if not pygame.mixer.music.get_busy():
+            self._play_next_track()
+
+    def _music_button_rect(self) -> pygame.Rect:
+        return pygame.Rect(10, 10, 100, 28)
+
+    def _current_song_name(self) -> str:
+        path = self.music_tracks[self.music_index]
+        stem = os.path.splitext(os.path.basename(path))[0]
+        return stem.replace("_", " ")
+
+    def _slot_rect(self, index: int) -> pygame.Rect:
+        cx = SCREEN_W // 2
+        return pygame.Rect(cx - 280, 140 + index * 120, 560, 100)
+
+    def _close_button_rect(self) -> pygame.Rect:
+        return pygame.Rect(SCREEN_W - 36, 8, 28, 28)
+
     def _handle(self, event: pygame.event.Event):
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if self._close_button_rect().collidepoint(event.pos):
+                pygame.quit()
+                sys.exit()
+            if self.music_tracks and self._music_button_rect().collidepoint(event.pos):
+                self._play_next_track()
+                return
+            if self.mode in (Mode.LOAD_MENU, Mode.SAVE_MENU):
+                for i in range(3):
+                    if self._slot_rect(i).collidepoint(event.pos):
+                        self.save_slot_cursor = i
+                        self.save_message = ""
+                        break
+            return
         if event.type != pygame.KEYDOWN:
             return
         if event.key == pygame.K_F9:
@@ -426,6 +482,12 @@ class Game:
                     self.save_message = ""
                 else:
                     self.save_message = "No save in this slot!"
+            elif event.key == pygame.K_d:
+                slot = self.save_slot_cursor + 1
+                if self._delete_save(slot):
+                    self.save_message = f"Slot {slot} deleted!"
+                else:
+                    self.save_message = "No save in this slot!"
             elif event.key == pygame.K_ESCAPE:
                 self.mode = Mode.TITLE
                 self.save_message = ""
@@ -440,6 +502,12 @@ class Game:
                 slot = self.save_slot_cursor + 1
                 self._save_game(slot)
                 self.save_message = f"Saved to Slot {slot}!"
+            elif event.key == pygame.K_d:
+                slot = self.save_slot_cursor + 1
+                if self._delete_save(slot):
+                    self.save_message = f"Slot {slot} deleted!"
+                else:
+                    self.save_message = "No save in this slot!"
             elif event.key == pygame.K_ESCAPE:
                 self.mode = self._pre_save_mode or Mode.STORY
                 self._pre_save_mode = None
@@ -816,9 +884,25 @@ class Game:
             self._draw_slot_menu(is_load=False)
         elif self.mode == Mode.LOAD_MENU:
             self._draw_slot_menu(is_load=True)
+        close_rect = self._close_button_rect()
         if self.gs.god_mode:
             tag = self.fonts["small"].render("GOD MODE (F9)", True, (255, 90, 90))
-            self.screen.blit(tag, (SCREEN_W - tag.get_width() - 12, 8))
+            self.screen.blit(tag, (close_rect.x - tag.get_width() - 12, 8))
+        pygame.draw.rect(self.screen, (60, 24, 24), close_rect, border_radius=6)
+        pygame.draw.rect(self.screen, (200, 60, 60), close_rect, 1, border_radius=6)
+        close_label = self.fonts["small"].render("X", True, (255, 160, 160))
+        self.screen.blit(close_label, (close_rect.x + (close_rect.width - close_label.get_width()) // 2, close_rect.y + (close_rect.height - close_label.get_height()) // 2))
+        if self.music_tracks:
+            rect = self._music_button_rect()
+            pygame.draw.rect(self.screen, (32, 44, 68), rect, border_radius=6)
+            pygame.draw.rect(self.screen, ACCENT, rect, 1, border_radius=6)
+            label = self.fonts["tiny"].render("♪ Next", True, TEXT_LIGHT)
+            self.screen.blit(label, (rect.x + (rect.width - label.get_width()) // 2, rect.y + (rect.height - label.get_height()) // 2))
+            song_text = self.fonts["small"].render(self._current_song_name(), True, (255, 255, 255))
+            song_rect = pygame.Rect(rect.x, rect.bottom + 6, song_text.get_width() + 16, rect.height)
+            pygame.draw.rect(self.screen, (20, 26, 42), song_rect, border_radius=6)
+            pygame.draw.rect(self.screen, ACCENT, song_rect, 1, border_radius=6)
+            self.screen.blit(song_text, (song_rect.x + 8, song_rect.y + (song_rect.height - song_text.get_height()) // 2))
 
     def _draw_outlined(self, font, text, color, outline_color, cx, y, outline=2):
         surf = font.render(text, True, color)
@@ -1129,12 +1213,12 @@ class Game:
             self.shop_message = f"-4 damage! (total -{gs.armor})"
         elif item["id"] == "random":
             import random
-            if random.random() < 0.30:
+            if random.random() < 0.40:
                 picked = random.choice(RANDOM_ITEM_POOL)
                 gs.items[picked] = gs.items.get(picked, 0) + 1
                 self.shop_message = f"Lucky! Got: {picked}!"
             else:
-                self.shop_message = "No luck... (30% chance)"
+                self.shop_message = "No luck... (40% chance)"
         elif item["id"] == "pressure_point":
             if gs.has_pressure_point:
                 self.shop_message = "You already know Pressure Point!"
@@ -1275,6 +1359,13 @@ class Game:
         except Exception:
             return None
 
+    def _delete_save(self, slot: int) -> bool:
+        path = self._save_path(slot)
+        if not os.path.exists(path):
+            return False
+        os.remove(path)
+        return True
+
     def _save_game(self, slot: int) -> None:
         gs = self.gs
         saved_mode = (self._pre_save_mode or self.mode).name
@@ -1378,7 +1469,7 @@ class Game:
             slot = i + 1
             info = self._get_save_info(slot)
             sel  = i == self.save_slot_cursor
-            rect = pygame.Rect(cx - 280, 140 + i * 120, 560, 100)
+            rect = self._slot_rect(i)
             pygame.draw.rect(self.screen, (55, 75, 110) if sel else (32, 44, 68), rect, border_radius=10)
             if sel:
                 pygame.draw.rect(self.screen, ACCENT, rect, 2, border_radius=10)
@@ -1406,7 +1497,7 @@ class Game:
             self.screen.blit(msg, (cx - msg.get_width() // 2, SCREEN_H - 80))
 
         action = "load" if is_load else "save"
-        hint_text = f"Up/Down — select   Enter — {action}   Esc — back"
+        hint_text = f"Up/Down — select   Enter — {action}   D — delete   Esc — back"
         hint = self.fonts["small"].render(hint_text, True, TEXT_LIGHT)
         self.screen.blit(hint, (cx - hint.get_width() // 2, SCREEN_H - 40))
 

@@ -93,6 +93,10 @@ MOVE_COOLDOWNS = {"Flame Burst": 3, "Sap Splash": 2, "Dodge": 2, "Heal": 6}
 HEAL_AMOUNT = 40
 HEAL_ANIM_FRAMES = 90
 
+POSE_SCALE = {
+    "heal": 0.75,
+}
+
 POSE_FOR_MOVE = {
     "Punch": "punch",
     "Sap Splash": "punch",
@@ -411,13 +415,17 @@ class BattleScreen:
           if extras:
               self.message += "  " + "  ".join(extras)
 
-  def _current_player_sprite(self) -> pygame.Surface | None:
+  def _current_pose_key(self) -> str | None:
       if self.player_poses and self.phase == "player_anim" and self.last_move_name:
-          key = POSE_FOR_MOVE.get(self.last_move_name)
-          if key:
-              pose = self.player_poses.get(key)
-              if pose:
-                  return pose
+          return POSE_FOR_MOVE.get(self.last_move_name)
+      return None
+
+  def _current_player_sprite(self) -> pygame.Surface | None:
+      key = self._current_pose_key()
+      if key:
+          pose = self.player_poses.get(key)
+          if pose:
+              return pose
       return self.player_sprite
 
   def _blit_sprite(
@@ -482,7 +490,11 @@ class BattleScreen:
       # Player platform (bottom left, on dirt)
       px, py = 60, 285
       pygame.draw.ellipse(surf, (120, 80, 40), (px + psx, py + 162, 200, 32))
-      self._blit_sprite(surf, self._current_player_sprite(), self.player.sprite_color, px + psx, py, 200, 200)
+      scale = POSE_SCALE.get(self._current_pose_key(), 1.0)
+      box = int(200 * scale)
+      sprite_x = px + psx + (200 - box) // 2
+      sprite_y = py + (200 - box)
+      self._blit_sprite(surf, self._current_player_sprite(), self.player.sprite_color, sprite_x, sprite_y, box, box)
       _draw_hp_bar(surf, fonts["small"], px, py - 76, 200, "You", self.player.hp, self.player.max_hp)
       if self.player_poison > 0:
           name_w = fonts["small"].size("You")[0]
