@@ -33,7 +33,7 @@ class Move:
 class Fighter:
     def __init__(self, name: str, max_hp: int, moves: list[Move], sprite_color: tuple[int, int, int],
                  attack_bonus: int = 0, armor: int = 0, has_antidote: bool = False,
-                 invincible: bool = False, one_shot: bool = False):
+                 invincible: bool = False, one_shot: bool = False, god_mode: bool = False):
         self.name = name
         self.max_hp = max_hp
         self.hp = max_hp
@@ -44,6 +44,7 @@ class Fighter:
         self.has_antidote = has_antidote
         self.invincible = invincible
         self.one_shot = one_shot
+        self.god_mode = god_mode
 
     @property
     def alive(self) -> bool:
@@ -104,7 +105,7 @@ POSE_FOR_MOVE = {
     "Heal": "heal",
     "M79 Shot": "m79",
     "Flame Burst": "flame",
-    "Finish": "flame",
+    "Flamethrower": "flame",
     "Elixir": "elixir",
     "Smoke Bomb": "smoke",
 }
@@ -133,17 +134,20 @@ class BattleScreen:
       self.dice_label = dice_label
       self.can_flee = can_flee
       self.special_moves = special_moves
+      self._lethal_move = special_moves[1] if special_moves else None
       self.background = background
       self.player_sprite = player_sprite
       self.enemy_sprite = enemy_sprite
       self.player_poses = player_poses or {}
       self.message = f"Wild {enemy.name} appeared! (Roll: {dice_value} — {dice_label})"
-      self.phase = "menu"  # menu | player_anim | enemy_anim | end
+      self.phase = "menu"  # menu | player_anim | enemy_anim | lethal_choice | end
+      self.lethal_choice_cursor = 0
       self.result: str | None = None  # win | lose | flee | spare
       self.selected_move = 0
       self.menu_mode = "fight"  # fight | bag (unused)
       self._anim_timer = 0
       self.last_move_name: str | None = None
+      self._last_move_was_lethal = False
       self.cooldowns: dict[str, int] = {}
       self.disabled_moves: dict[str, int] = {}
       self.dodge_active = False
@@ -160,6 +164,21 @@ class BattleScreen:
       self.m79_charges = m79_charges
 
   def handle_event(self, event: pygame.event.Event) -> None:
+      if self.phase == "lethal_choice":
+          if event.type != pygame.KEYDOWN:
+              return
+          if event.key in (pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame.K_RIGHT,
+                            pygame.K_w, pygame.K_s, pygame.K_a, pygame.K_d):
+              self.lethal_choice_cursor = 1 - self.lethal_choice_cursor
+          elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+              if self.lethal_choice_cursor == 0:
+                  self.result = "win"
+                  self.message = f"You finish off {self.enemy.name}!"
+              else:
+                  self.result = "spare"
+                  self.message = f"You spare {self.enemy.name}. It recovers…"
+              self.phase = "end"
+          return
       if self.phase != "menu" or self.result:
           return
       if event.type != pygame.KEYDOWN:
@@ -200,12 +219,8 @@ class BattleScreen:
   def _execute_move(self, move: Move) -> None:
       import random
       self.last_move_name = move.name
-      if move.name == "Spare":
-          self.result = "spare"
-          self.message = "You spare the rafflesia. It recovers…"
-          self.phase = "end"
-          return
-      if move.name == "Finish":
+      self._last_move_was_lethal = move is self._lethal_move
+      if move is self._lethal_move:
           dmg = max(40, move.power)
           self._hit_enemy(dmg)
           self.enemy_shake = 14
@@ -231,7 +246,7 @@ class BattleScreen:
       if move.name == "Dodge":
           self.dodge_active = True
           cd = MOVE_COOLDOWNS.get(move.name, 0)
-          if cd:
+          if cd and not self.player.god_mode:
               self.cooldowns[move.name] = cd
           self.message = "You dodge! The zombie strikes back!"
           self.phase = "player_anim"
@@ -240,7 +255,8 @@ class BattleScreen:
       if move.name == "Heal":
           self._heal_start_hp = self.player.hp
           self._heal_end_hp = min(self.player.max_hp, self.player.hp + HEAL_AMOUNT)
-          self.cooldowns["Heal"] = MOVE_COOLDOWNS["Heal"]
+          if not self.player.god_mode:
+              self.cooldowns["Heal"] = MOVE_COOLDOWNS["Heal"]
           self.message = "You focus and slowly get back up..."
           self.phase = "player_anim"
           self._anim_timer = HEAL_ANIM_FRAMES
@@ -260,7 +276,7 @@ class BattleScreen:
           return
       if move.name == "Pressure Point":
           cd = MOVE_COOLDOWNS.get("Pressure Point", 0)
-          if cd:
+          if cd and not self.player.god_mode:
               self.cooldowns["Pressure Point"] = cd
           r = random.random()
           if r < 0.30:
@@ -289,17 +305,27 @@ class BattleScreen:
       else:
           self.message = f"You used {move.name}! It dealt {dmg} damage."
       cd = MOVE_COOLDOWNS.get(move.name, 0)
-      if cd:
+      if cd and not self.player.god_mode:
           self.cooldowns[move.name] = cd
       self.phase = "player_anim"
       self._anim_timer = 28
+
+  def _handle_enemy_defeated(self, win_message: str) -> None:
+      if self.special_moves and not self._last_move_was_lethal:
+          self.phase = "lethal_choice"
+          self.lethal_choice_cursor = 0
+          self.message = f"{self.enemy.name} is finished! What will you do?"
+          return
+      self.result = "win"
+      self.message = win_message
+      self.phase = "end"
 
   def update(self) -> None:
       if self.enemy_shake > 0:
           self.enemy_shake -= 1
       if self.player_shake > 0:
           self.player_shake -= 1
-      if self.phase == "menu" or self.result:
+      if self.phase in ("menu", "lethal_choice") or self.result:
           return
       if self.phase == "player_anim" and self.last_move_name in ("Heal", "Elixir") and self._anim_timer > 0:
           elapsed = HEAL_ANIM_FRAMES - self._anim_timer
@@ -318,9 +344,7 @@ class BattleScreen:
               self.phase = "end"
               return
           if not self.enemy.alive:
-              self.result = "win"
-              self.message = f"{self.enemy.name} fainted! You win!"
-              self.phase = "end"
+              self._handle_enemy_defeated(f"{self.enemy.name} fainted! You win!")
               return
           if self._skip_enemy_turn:
               self._skip_enemy_turn = False
@@ -350,9 +374,7 @@ class BattleScreen:
               self.enemy_burn -= 1
               tick_msgs.append(f"Burn: -{burn_dmg}HP ({self.enemy_burn} left)")
               if not self.enemy.alive:
-                  self.result = "win"
-                  self.message = f"{self.enemy.name} burned to death! You win!"
-                  self.phase = "end"
+                  self._handle_enemy_defeated(f"{self.enemy.name} burned to death! You win!")
                   return
           if self.player_poison > 0:
               poison_dmg = 6
@@ -406,7 +428,8 @@ class BattleScreen:
               self.player_poison = 3
               extras.append("Poisoned! (3 turns)")
           attack_moves = [m for m in self._current_moves()
-                          if m.name not in ("Dodge", "Heal", "Run", "Spare", "Finish")]
+                          if m.name not in ("Dodge", "Heal", "Run")
+                          and m is not self._lethal_move]
           if attack_moves and random.random() < 0.35:
               target = random.choice(attack_moves)
               if self.disabled_moves.get(target.name, 0) == 0:
@@ -515,10 +538,26 @@ class BattleScreen:
       text_area.y += 10
       self._blit_wrapped(surf, fonts["text"], self.message, text_area)
 
-      moves = self._current_moves()
       move_rect = pygame.Rect(SCREEN_W // 2 + 8, panel_y + 12, SCREEN_W // 2 - 24, panel_h - 24)
       pygame.draw.rect(surf, PANEL, move_rect, border_radius=6)
       pygame.draw.rect(surf, PANEL_BORDER, move_rect, 2, border_radius=6)
+      if self.phase == "lethal_choice":
+          options = [("Finish", "End it for good"), ("Spear", "Let it live")]
+          cell_h = (move_rect.height - 12) // 2
+          for i, (label, desc) in enumerate(options):
+              r = pygame.Rect(move_rect.x + 6, move_rect.y + 6 + i * cell_h, move_rect.width - 12, cell_h - 4)
+              sel = i == self.lethal_choice_cursor
+              color = ACCENT if sel else (220, 220, 228)
+              pygame.draw.rect(surf, color, r, border_radius=4)
+              pygame.draw.rect(surf, PANEL_BORDER, r, 1, border_radius=4)
+              name_s = fonts["small"].render(label, True, TEXT)
+              surf.blit(name_s, (r.x + 8, r.y + 8))
+              desc_s = fonts["tiny"].render(desc, True, (80, 80, 96))
+              surf.blit(desc_s, (r.x + 8, r.y + 28))
+          hint = fonts["tiny"].render("Arrows: select  |  Enter: confirm", True, TEXT_LIGHT)
+          surf.blit(hint, (16, 8))
+          return
+      moves = self._current_moves()
       cols, rows = 2, 2
       cell_w = (move_rect.width - 12) // cols
       cell_h = (move_rect.height - 12) // rows
@@ -545,6 +584,10 @@ class BattleScreen:
           elif on_cd:
               cd_txt = fonts["tiny"].render(f"CD: {self.cooldowns[mv.name]} turns", True, (180, 80, 80))
               surf.blit(cd_txt, (r.x + 8, r.y + 28))
+          elif mv is self._lethal_move:
+              actual = max(40, mv.power)
+              pwr = fonts["tiny"].render(f"Dmg {actual}", True, (80, 80, 96))
+              surf.blit(pwr, (r.x + 8, r.y + 28))
           elif mv.name == "M79 Shot":
               info = fonts["tiny"].render(f"Dmg 48  Shells: {self.m79_charges}", True, (255, 180, 50))
               surf.blit(info, (r.x + 8, r.y + 28))
@@ -557,18 +600,12 @@ class BattleScreen:
           elif mv.name == "Run":
               info = fonts["tiny"].render("30% escape", True, (80, 80, 96))
               surf.blit(info, (r.x + 8, r.y + 28))
-          elif mv.name == "Finish":
-              actual = max(40, mv.power)
-              pwr = fonts["tiny"].render(f"Dmg {actual}", True, (80, 80, 96))
-              surf.blit(pwr, (r.x + 8, r.y + 28))
           elif mv.name == "Heal":
               info = fonts["tiny"].render(
                   f"Slowly restore {HEAL_AMOUNT} HP  CD:{MOVE_COOLDOWNS['Heal']}",
                   True, (80, 180, 80),
               )
               surf.blit(info, (r.x + 8, r.y + 28))
-          elif mv.name == "Spare":
-              pass
           elif mv.power:
               actual = max(8, int((mv.power + (self.player.max_hp // 20)) * 1.5))
               pwr = fonts["tiny"].render(f"Dmg {actual}", True, (80, 80, 96))

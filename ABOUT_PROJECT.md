@@ -52,7 +52,7 @@ Press **Enter** after the roll animation to start the battle.
 - Select moves with **arrow keys**, confirm with **Enter**.
 - UI includes enemy/player HP bars, colored HP (green → yellow → red), move descriptions, and a message log.
 - **Run** is available on some fights (e.g. the first young rafflesia) to escape and continue the story.
-- On the **final boss**, special moves appear: **Spare** (bad ending) vs **Finish** (good ending, if you have Ruellia tuberosa).
+- On the **final boss**, special moves **Heal** (spare) and **Flamethrower** (attack) appear alongside your normal moves. Landing the killing blow with any attack pauses the fight for a final choice: **Finish** (good ending, if you have Ruellia tuberosa) vs **Spear** (bad ending).
 
 ### 4. Endings collection
 
@@ -68,7 +68,7 @@ Deaths and story failures unlock **bad endings**; the single **good ending** req
 | `horde` | Infected Horde | Swarm fight before the finale |
 | `rafflesia_young` | Rafflesia | First encounter; can flee |
 | `rafflesia_strong` | Giant Rafflesia | Mid/late boss fights |
-| `rafflesia_final` | Corrupted Rafflesia | Final boss with Spare/Finish options |
+| `rafflesia_final` | Corrupted Rafflesia | Final boss; killing blow triggers a Finish/Spear choice |
 
 Enemy HP scales with the dice multiplier before each battle.
 

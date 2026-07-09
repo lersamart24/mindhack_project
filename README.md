@@ -25,7 +25,7 @@ python main.py
   - **17–20** (10%): lucky — weakest enemy
 - **Battles**: Arrow keys to pick a move, Enter to confirm. Layout inspired by Pokemon (HP bars, 2×2 move grid, message box).
 - **First rafflesia**: Use **Run** to escape and continue the story (like your original “run” choice).
-- **Final boss**: Choose **Spare** → bad ending; **Finish** → good ending (if you picked Ruellia tuberosa earlier).
+- **Final boss**: Special moves **Heal** (spare) and **Flamethrower** (attack) are available. When any attack lands the killing blow, you're asked to **Finish** (good ending, if you picked Ruellia tuberosa earlier) or **Spear** (spare, bad ending).
 - **Endings**: Each death or ending is tracked on the title screen (collect them all).
 
 ## Files
