@@ -42,6 +42,11 @@ class Mode(Enum):
     TUTORIAL = auto()
     SAVE_MENU = auto()
     LOAD_MENU = auto()
+    GOD_PASSWORD = auto()
+
+
+GOD_MODE_PASSWORD = "21"
+GOD_MODE_HINT = "9 + 10 = ?"
 
 
 TUTORIAL_PAGES = [
@@ -244,7 +249,7 @@ def player_fighter(gs: GameState) -> Fighter:
         moves.append(Move("Sap Splash", 16))
     f = Fighter("Survivor", gs.player_max_hp, moves[:4], (80, 140, 220),
                 attack_bonus=gs.attack_bonus, armor=gs.armor, has_antidote=gs.has_antidote,
-                invincible=gs.god_mode, one_shot=gs.god_mode)
+                invincible=gs.god_mode, one_shot=gs.god_mode, god_mode=gs.god_mode)
     f.hp = gs.player_hp
     return f
 
@@ -386,8 +391,12 @@ class Game:
         self.tutorial_page = 0
         self.save_slot_cursor = 0
         self.save_message = ""
+        self.god_password_input = ""
+        self.god_password_error = ""
+        self._pre_god_mode: Mode | None = None
         self.music_tracks = self._load_music_tracks()
         self.music_index = -1
+        self.music_muted = False
         if self.music_tracks:
             self._play_next_track()
         self._pre_save_mode: Mode | None = None
@@ -431,6 +440,13 @@ class Game:
     def _music_button_rect(self) -> pygame.Rect:
         return pygame.Rect(10, 10, 100, 28)
 
+    def _mute_button_rect(self) -> pygame.Rect:
+        return pygame.Rect(118, 10, 36, 28)
+
+    def _toggle_mute(self) -> None:
+        self.music_muted = not self.music_muted
+        pygame.mixer.music.set_volume(0.0 if self.music_muted else 1.0)
+
     def _current_song_name(self) -> str:
         path = self.music_tracks[self.music_index]
         stem = os.path.splitext(os.path.basename(path))[0]
@@ -451,6 +467,15 @@ class Game:
             if self.music_tracks and self._music_button_rect().collidepoint(event.pos):
                 self._play_next_track()
                 return
+            if self.music_tracks and self._mute_button_rect().collidepoint(event.pos):
+                self._toggle_mute()
+                return
+            if self.mode == Mode.GOD_PASSWORD:
+                for label, rect in self._keypad_button_rects().items():
+                    if rect.collidepoint(event.pos):
+                        self._keypad_press(label)
+                        break
+                return
             if self.mode in (Mode.LOAD_MENU, Mode.SAVE_MENU):
                 for i in range(3):
                     if self._slot_rect(i).collidepoint(event.pos):
@@ -461,7 +486,27 @@ class Game:
         if event.type != pygame.KEYDOWN:
             return
         if event.key == pygame.K_F9:
-            self._toggle_god_mode()
+            if self.gs.god_mode:
+                self._toggle_god_mode()
+            elif self.mode != Mode.GOD_PASSWORD:
+                self._pre_god_mode = self.mode
+                self.god_password_input = ""
+                self.god_password_error = ""
+                self.mode = Mode.GOD_PASSWORD
+            return
+        if self.mode == Mode.GOD_PASSWORD:
+            if event.key == pygame.K_ESCAPE:
+                self.mode = self._pre_god_mode or Mode.TITLE
+                self._pre_god_mode = None
+            elif event.key == pygame.K_BACKSPACE:
+                self.god_password_input = self.god_password_input[:-1]
+                self.god_password_error = ""
+            elif event.key in (pygame.K_RETURN, pygame.K_SPACE, pygame.K_KP_ENTER):
+                self._submit_god_password()
+            elif pygame.K_0 <= event.key <= pygame.K_9:
+                self._keypad_press(chr(event.key))
+            elif pygame.K_KP0 <= event.key <= pygame.K_KP9:
+                self._keypad_press(chr(event.key - pygame.K_KP0 + ord("0")))
             return
         if self.mode == Mode.TITLE and event.key in (pygame.K_RETURN, pygame.K_SPACE):
             self.mode = Mode.STORY
@@ -752,7 +797,7 @@ class Game:
         enemy = make_enemy(self.pending_battle or "infected", self.dice_mult)
         special = None
         if self.final_spare_available:
-            special = [Move("Spare", 0, "Let it live"), Move("Finish", 30, "End it")]
+            special = [Move("Heal", 0, "Restore HP"), Move("Flamethrower", 30, "End it")]
         enemy_key = self.pending_battle or "infected"
         self.battle = BattleScreen(
             player_fighter(self.gs),
@@ -884,6 +929,8 @@ class Game:
             self._draw_slot_menu(is_load=False)
         elif self.mode == Mode.LOAD_MENU:
             self._draw_slot_menu(is_load=True)
+        elif self.mode == Mode.GOD_PASSWORD:
+            self._draw_god_password()
         close_rect = self._close_button_rect()
         if self.gs.god_mode:
             tag = self.fonts["small"].render("GOD MODE (F9)", True, (255, 90, 90))
@@ -898,6 +945,11 @@ class Game:
             pygame.draw.rect(self.screen, ACCENT, rect, 1, border_radius=6)
             label = self.fonts["tiny"].render("♪ Next", True, TEXT_LIGHT)
             self.screen.blit(label, (rect.x + (rect.width - label.get_width()) // 2, rect.y + (rect.height - label.get_height()) // 2))
+            mute_rect = self._mute_button_rect()
+            pygame.draw.rect(self.screen, (32, 44, 68), mute_rect, border_radius=6)
+            pygame.draw.rect(self.screen, ACCENT, mute_rect, 1, border_radius=6)
+            mute_label = self.fonts["tiny"].render("X" if self.music_muted else "♪", True, TEXT_LIGHT)
+            self.screen.blit(mute_label, (mute_rect.x + (mute_rect.width - mute_label.get_width()) // 2, mute_rect.y + (mute_rect.height - mute_label.get_height()) // 2))
             song_text = self.fonts["small"].render(self._current_song_name(), True, (255, 255, 255))
             song_rect = pygame.Rect(rect.x, rect.bottom + 6, song_text.get_width() + 16, rect.height)
             pygame.draw.rect(self.screen, (20, 26, 42), song_rect, border_radius=6)
@@ -1183,8 +1235,44 @@ class Game:
         if self.battle:
             self.battle.player.invincible = self.gs.god_mode
             self.battle.player.one_shot = self.gs.god_mode
+            self.battle.player.god_mode = self.gs.god_mode
             if self.gs.god_mode:
                 self.battle.player.hp = self.battle.player.max_hp
+                self.battle.cooldowns.clear()
+
+    def _keypad_button_rects(self) -> dict[str, pygame.Rect]:
+        labels = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "C", "0", "OK"]
+        cx = SCREEN_W // 2
+        top = 260
+        btn_w, btn_h, gap, cols = 70, 56, 14, 3
+        rects: dict[str, pygame.Rect] = {}
+        for i, label in enumerate(labels):
+            row, col = divmod(i, cols)
+            x = cx - (cols * btn_w + (cols - 1) * gap) // 2 + col * (btn_w + gap)
+            y = top + row * (btn_h + gap)
+            rects[label] = pygame.Rect(x, y, btn_w, btn_h)
+        return rects
+
+    def _keypad_press(self, label: str) -> None:
+        if label == "C":
+            self.god_password_input = ""
+            self.god_password_error = ""
+        elif label == "OK":
+            self._submit_god_password()
+        elif len(self.god_password_input) < 6:
+            self.god_password_input += label
+            self.god_password_error = ""
+
+    def _submit_god_password(self) -> None:
+        if self.god_password_input == GOD_MODE_PASSWORD:
+            self.mode = self._pre_god_mode or Mode.TITLE
+            self._pre_god_mode = None
+            self.god_password_input = ""
+            self.god_password_error = ""
+            self._toggle_god_mode()
+        else:
+            self.god_password_error = "Wrong answer! Try again."
+            self.god_password_input = ""
 
     def _open_shop(self, after: str):
         self.mode = Mode.SHOP
@@ -1500,6 +1588,40 @@ class Game:
         hint_text = f"Up/Down — select   Enter — {action}   D — delete   Esc — back"
         hint = self.fonts["small"].render(hint_text, True, TEXT_LIGHT)
         self.screen.blit(hint, (cx - hint.get_width() // 2, SCREEN_H - 40))
+
+    def _draw_god_password(self) -> None:
+        self.screen.fill((20, 28, 48))
+        cx = SCREEN_W // 2
+        title = self.fonts["heading"].render("God Mode Lock", True, ACCENT)
+        self.screen.blit(title, (cx - title.get_width() // 2, 60))
+
+        hint = self.fonts["text"].render(GOD_MODE_HINT, True, TEXT_LIGHT)
+        self.screen.blit(hint, (cx - hint.get_width() // 2, 130))
+
+        display_rect = pygame.Rect(cx - 110, 175, 220, 50)
+        pygame.draw.rect(self.screen, (32, 44, 68), display_rect, border_radius=8)
+        pygame.draw.rect(self.screen, ACCENT, display_rect, 2, border_radius=8)
+        input_text = self.fonts["heading"].render(self.god_password_input or " ", True, TEXT_LIGHT)
+        self.screen.blit(input_text, (cx - input_text.get_width() // 2, display_rect.y + 8))
+
+        for label, rect in self._keypad_button_rects().items():
+            if label == "C":
+                color = (110, 60, 60)
+            elif label == "OK":
+                color = (60, 110, 70)
+            else:
+                color = (55, 75, 110)
+            pygame.draw.rect(self.screen, color, rect, border_radius=8)
+            pygame.draw.rect(self.screen, ACCENT, rect, 1, border_radius=8)
+            lbl = self.fonts["small"].render(label, True, TEXT_LIGHT)
+            self.screen.blit(lbl, (rect.x + (rect.width - lbl.get_width()) // 2, rect.y + (rect.height - lbl.get_height()) // 2))
+
+        if self.god_password_error:
+            err = self.fonts["small"].render(self.god_password_error, True, (240, 100, 100))
+            self.screen.blit(err, (cx - err.get_width() // 2, SCREEN_H - 76))
+
+        hint2 = self.fonts["small"].render("Type digits or click keypad   Enter — confirm   Esc — cancel", True, TEXT_LIGHT)
+        self.screen.blit(hint2, (cx - hint2.get_width() // 2, SCREEN_H - 40))
 
     # ── Endings persistence ─────────────────────────────────────────────────
     def _endings_path(self) -> str:
