@@ -8,6 +8,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import shutil
 import sys
 from enum import Enum, auto
 
@@ -28,6 +29,35 @@ from constants import (
     TEXT_LIGHT,
 )
 from dice import roll_d20
+
+GAME_DATA_DIR_NAME = "MindHackGin"
+
+
+def _user_data_dir() -> str:
+    """Writable per-user folder for save data (survives itch.io app reinstalls/updates)."""
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    elif sys.platform == "darwin":
+        base = os.path.expanduser("~/Library/Application Support")
+    else:
+        base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    path = os.path.join(base, GAME_DATA_DIR_NAME)
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _user_data_path(filename: str) -> str:
+    """Resolve a save-data filename to the user data dir, migrating a legacy
+    copy that used to live next to the script (which itch.io overwrites on update)."""
+    new_path = os.path.join(_user_data_dir(), filename)
+    if not os.path.exists(new_path):
+        old_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
+        if os.path.exists(old_path):
+            try:
+                shutil.copy2(old_path, new_path)
+            except OSError:
+                pass
+    return new_path
 
 
 class Mode(Enum):
@@ -1427,7 +1457,7 @@ class Game:
 
     # ── Save / Load ────────────────────────────────────────────────────────
     def _save_path(self, slot: int) -> str:
-        return os.path.join(os.path.dirname(os.path.abspath(__file__)), f"save_{slot}.json")
+        return _user_data_path(f"save_{slot}.json")
 
     def _get_save_info(self, slot: int) -> dict | None:
         path = self._save_path(slot)
@@ -1625,7 +1655,7 @@ class Game:
 
     # ── Endings persistence ─────────────────────────────────────────────────
     def _endings_path(self) -> str:
-        return os.path.join(os.path.dirname(os.path.abspath(__file__)), "endings.json")
+        return _user_data_path("endings.json")
 
     def _save_endings(self) -> None:
         try:
